@@ -1,0 +1,4 @@
+# CToM agent-loop registration
+# This configures the multi-turn agent loop for personalized dialogue training.
+- name: ctom_agent
+  _target_: ctom.agent_loop.CToMAgentLoop

@@ -1,0 +1,2028 @@
+diff --git a/verl/experimental/agent_loop/agent_loop.py b/verl/experimental/agent_loop/agent_loop.py
+index bea976b8..0df02edf 100644
+--- a/verl/experimental/agent_loop/agent_loop.py
++++ b/verl/experimental/agent_loop/agent_loop.py
+@@ -183,6 +183,100 @@ class AgentLoopMetrics(BaseModel):
+     tool_calls: float = 0.0
+     compute_score: float = 0.0
+     num_preempted: int = -1  # -1 means not available
++    sft_v3_answer_clipped: float = 0.0
++    sft_v3_prediction_clipped: float = 0.0
++    sft_v3_valid_turn: float = 0.0
++    # sft_v4/v5 (draft -> prediction -> revision). Declared here because this is a
++    # pydantic model: any key the agent loop emits that is NOT a field is dropped
++    # silently, so every v4/v5 "what to watch" counter read as absent while the
++    # sft_v3_* triple above logged a constant 0.0 (that path never runs in v4/v5).
++    sft_v4_draft_clipped: float = 0.0
++    sft_v4_prediction_clipped: float = 0.0
++    sft_v4_revision_clipped: float = 0.0
++    sft_v4_valid_turn: float = 0.0
++    sft_v4_empty_revision: float = 0.0
++    sft_v4_turn_skipped_no_budget: float = 0.0
++    # Turns where the draft submitted but the revision would have dropped the
++    # marker, so the controller forced it back in. This is the size of the bug
++    # fixed on 2026-08-31; on writing eval 945368 it was 57% of conversations.
++    sft_v4_submit_marker_forced: float = 0.0
++    sft_v5_counterfactual_ok: float = 0.0
++    sft_v5_counterfactual_missing: float = 0.0
++    # sft_v6 / BDR counters (the retired BDR predecessor). Same rule as above:
++    # declare here AND list in _performance_metrics, or the key is dropped.
++    bdr_rounds: float = 0.0
++    bdr_internal_turns: float = 0.0
++    bdr_turn_skipped_no_budget: float = 0.0
++    bdr_decision_invalid: float = 0.0
++    bdr_show_coerced: float = 0.0
++    bdr_revise_at_cap: float = 0.0
++    bdr_empty_ask: float = 0.0
++    bdr_draft_clipped: float = 0.0
++    bdr_belief_clipped: float = 0.0
++    bdr_ask_clipped: float = 0.0
++    bdr_belief_invalid: float = 0.0
++    bdr_decision_commit: float = 0.0
++    bdr_decision_show: float = 0.0
++    bdr_decision_ask: float = 0.0
++    bdr_decision_revise: float = 0.0
++    bdr_round_draft_changed: float = 0.0
++    bdr_ask_with_assumption: float = 0.0
++    bdr_invalid_phases: float = 0.0
++    bdr_cf_ok: float = 0.0
++    bdr_cf_missing: float = 0.0
++    bdr_cf_skipped_len: float = 0.0
++    bdr_belief_top_confirm: float = 0.0
++    bdr_belief_top_doubt: float = 0.0
++    bdr_belief_top_error: float = 0.0
++    bdr_belief_top_wrong_answer: float = 0.0
++    bdr_belief_top_asks_boxed: float = 0.0
++    bdr_belief_top_unclear: float = 0.0
++    bdr_belief_top_accept: float = 0.0
++    bdr_belief_top_fix: float = 0.0
++    bdr_belief_top_answers: float = 0.0
++    bdr_belief_top_dont_mind: float = 0.0
++    bdr_belief_top_terminate: float = 0.0
++    bdr_belief_top_reject: float = 0.0
++    bdr_belief_top_dont_know: float = 0.0
++    # sft_v7 counters (the paper's method section). Same rule: a key the
++    # loop emits that is NOT declared here is dropped silently.
++    v7_rounds: float = 0.0
++    v7_visible_tokens: float = 0.0
++    v7_generated_tokens: float = 0.0
++    v7_inner_iters: float = 0.0
++    v7_decision_draft: float = 0.0
++    v7_decision_ask: float = 0.0
++    v7_decision_commit: float = 0.0
++    v7_decision_invalid: float = 0.0
++    v7_commit_without_draft: float = 0.0
++    v7_empty_ask: float = 0.0
++    v7_verdict_satisfied: float = 0.0
++    v7_verdict_unsatisfied: float = 0.0
++    v7_verdict_idiom: float = 0.0
++    v7_draft_changed: float = 0.0
++    v7_turn_skipped_no_budget: float = 0.0
++    v7_inner_stopped_no_budget: float = 0.0
++    v7_inner_cap_hit: float = 0.0
++    v7_prediction_invalid: float = 0.0
++    v7_prediction_eos_popped: float = 0.0
++    v7_think_clipped: float = 0.0
++    v7_draft_clipped: float = 0.0
++    v7_prediction_clipped: float = 0.0
++    v7_ask_clipped: float = 0.0
++    v7_invalid_phases: float = 0.0
++    v7_cf_ok: float = 0.0
++    v7_cf_missing: float = 0.0
++    v7_cf_terminate_substituted: float = 0.0
++    # Slots whose counterfactual reply was terminate-only/empty and are therefore
++    # NOT supervised by the aux loss (pred_sft_skip_terminate). Supervised slots
++    # = v7_cf_ok - v7_cf_dropped_satisfied. Distinct from v7_cf_missing, which
++    # means the simulator call itself failed.
++    v7_cf_dropped_satisfied: float = 0.0
++    v7_gap_tp: float = 0.0
++    v7_gap_fp: float = 0.0
++    v7_gap_fn: float = 0.0
++    v7_gap_tn: float = 0.0
++    v7_ask_confirmed: float = 0.0
+ 
+ 
+ class AgentLoopOutput(BaseModel):
+@@ -888,6 +982,11 @@ class AgentLoopWorker:
+                 result = await selected_reward_loop_worker_handle.compute_score.remote(data)
+                 output.reward_score = result["reward_score"]
+                 output.extra_fields["reward_extra_info"] = result["reward_extra_info"]
++                # Optional dense per-token reward (e.g. turn-wise reward). When
++                # present it overrides the default scalar-at-last-token placement
++                # in _postprocess.
++                if result.get("token_level_scores") is not None:
++                    output.extra_fields["token_level_scores"] = result["token_level_scores"]
+             output.metrics.compute_score = timing["compute_score"]
+ 
+     async def _compute_teacher_logprobs(
+@@ -929,6 +1028,12 @@ class AgentLoopWorker:
+         input_ids = torch.cat([input.input_ids for input in inputs], dim=0)
+         position_ids = torch.cat([input.position_ids for input in inputs], dim=0)
+         optional_outputs = {}
++        if OmegaConf.select(self.config, "actor_rollout_ref.actor.v7_action_protocol", default="legacy") == "categorical_v1":
++            from verl.workers.utils.categorical_actions import action_batch_from_records
++
++            optional_outputs["action_token_ids"] = action_batch_from_records(
++                [item.extra_fields.get("v7_rounds", []) for item in inputs], response_ids, response_mask
++            )
+         if inputs[0].response_logprobs is not None:
+             optional_outputs["rollout_log_probs"] = torch.cat([input.response_logprobs for input in inputs], dim=0)
+         if inputs[0].routed_experts is not None:
+@@ -950,13 +1055,34 @@ class AgentLoopWorker:
+             batch_size=len(inputs),
+         )
+ 
+-        scores = [input.reward_score for input in inputs]
+-        if all(score is not None for score in scores):
+-            prompt_length = prompt_ids.size(1)
+-            response_length = attention_mask[:, prompt_length:].sum(dim=1) - 1
+-            rm_scores = torch.zeros_like(response_mask, dtype=torch.float32)
+-            rm_scores[torch.arange(response_mask.size(0)), response_length] = torch.tensor(scores, dtype=torch.float32)
++        # Dense per-token reward (turn-wise reward): the reward worker may return
++        # a full-width score vector that places a reward on each turn's last
++        # token. Pop it from extra_fields so it is not duplicated into
++        # non_tensor_batch below. When every sample has one, use it directly;
++        # otherwise fall back to the default scalar-at-last-token placement.
++        token_level_scores_list = [input.extra_fields.pop("token_level_scores", None) for input in inputs]
++        if all(t is not None for t in token_level_scores_list):
++            rm_scores = torch.stack(
++                [torch.as_tensor(t, dtype=torch.float32).reshape(-1) for t in token_level_scores_list],
++                dim=0,
++            )
++            if rm_scores.size(1) != response_mask.size(1):
++                # Defensive: align width to response_mask (right padding/truncation).
++                fixed = torch.zeros_like(response_mask, dtype=torch.float32)
++                width = min(rm_scores.size(1), response_mask.size(1))
++                fixed[:, :width] = rm_scores[:, :width]
++                rm_scores = fixed
+             batch["rm_scores"] = rm_scores
++        else:
++            scores = [input.reward_score for input in inputs]
++            if all(score is not None for score in scores):
++                prompt_length = prompt_ids.size(1)
++                response_length = attention_mask[:, prompt_length:].sum(dim=1) - 1
++                rm_scores = torch.zeros_like(response_mask, dtype=torch.float32)
++                rm_scores[torch.arange(response_mask.size(0)), response_length] = torch.tensor(
++                    scores, dtype=torch.float32
++                )
++                batch["rm_scores"] = rm_scores
+ 
+         non_tensor_batch = {
+             "__num_turns__": np.array([input.num_turns for input in inputs], dtype=np.int32),
+@@ -1223,6 +1349,92 @@ class AgentLoopManager:
+         timing["agent_loop/num_preempted/min"] = num_preempted.min()
+         timing["agent_loop/num_preempted/max"] = num_preempted.max()
+         timing["agent_loop/num_preempted/mean"] = num_preempted.mean()
++        # Must stay in sync with the sft_* fields on AgentLoopMetrics above: a
++        # field declared there but missing here is carried but never logged.
++        for key in (
++            "sft_v3_answer_clipped",
++            "sft_v3_prediction_clipped",
++            "sft_v3_valid_turn",
++            "sft_v4_draft_clipped",
++            "sft_v4_prediction_clipped",
++            "sft_v4_revision_clipped",
++            "sft_v4_valid_turn",
++            "sft_v4_empty_revision",
++            "sft_v4_turn_skipped_no_budget",
++            "sft_v4_submit_marker_forced",
++            "sft_v5_counterfactual_ok",
++            "sft_v5_counterfactual_missing",
++            "bdr_rounds",
++            "bdr_internal_turns",
++            "bdr_turn_skipped_no_budget",
++            "bdr_decision_invalid",
++            "bdr_show_coerced",
++            "bdr_revise_at_cap",
++            "bdr_empty_ask",
++            "bdr_draft_clipped",
++            "bdr_belief_clipped",
++            "bdr_ask_clipped",
++            "bdr_belief_invalid",
++            "bdr_decision_commit",
++            "bdr_decision_show",
++            "bdr_decision_ask",
++            "bdr_decision_revise",
++            "bdr_round_draft_changed",
++            "bdr_ask_with_assumption",
++            "bdr_invalid_phases",
++            "bdr_cf_ok",
++            "bdr_cf_missing",
++            "bdr_cf_skipped_len",
++            "bdr_belief_top_confirm",
++            "bdr_belief_top_doubt",
++            "bdr_belief_top_error",
++            "bdr_belief_top_wrong_answer",
++            "bdr_belief_top_asks_boxed",
++            "bdr_belief_top_unclear",
++            "bdr_belief_top_accept",
++            "bdr_belief_top_fix",
++            "bdr_belief_top_answers",
++            "bdr_belief_top_dont_mind",
++            "bdr_belief_top_terminate",
++            "bdr_belief_top_reject",
++            "bdr_belief_top_dont_know",
++            "v7_rounds",
++            "v7_visible_tokens",
++            "v7_generated_tokens",
++            "v7_inner_iters",
++            "v7_decision_draft",
++            "v7_decision_ask",
++            "v7_decision_commit",
++            "v7_decision_invalid",
++            "v7_commit_without_draft",
++            "v7_empty_ask",
++            "v7_verdict_satisfied",
++            "v7_verdict_unsatisfied",
++            "v7_verdict_idiom",
++            "v7_draft_changed",
++            "v7_turn_skipped_no_budget",
++            "v7_inner_stopped_no_budget",
++            "v7_inner_cap_hit",
++            "v7_prediction_invalid",
++            "v7_prediction_eos_popped",
++            "v7_think_clipped",
++            "v7_draft_clipped",
++            "v7_prediction_clipped",
++            "v7_ask_clipped",
++            "v7_invalid_phases",
++            "v7_cf_ok",
++            "v7_cf_missing",
++            "v7_cf_terminate_substituted",
++            "v7_cf_dropped_satisfied",
++            "v7_gap_tp",
++            "v7_gap_fp",
++            "v7_gap_fn",
++            "v7_gap_tn",
++            "v7_ask_confirmed",
++        ):
++            values = np.array([metric.get(key, 0.0) for chunk in metrics for metric in chunk])
++            timing[f"agent_loop/{key}/mean"] = values.mean()
++            timing[f"agent_loop/{key}/sum"] = values.sum()
+         timing["agent_loop/generate_sequences/min"] = t_generate_sequences.min()
+         timing["agent_loop/generate_sequences/max"] = t_generate_sequences.max()
+         timing["agent_loop/generate_sequences/mean"] = t_generate_sequences.mean()
+diff --git a/verl/tools/schemas.py b/verl/tools/schemas.py
+index aa01ae72..1de433b9 100644
+--- a/verl/tools/schemas.py
++++ b/verl/tools/schemas.py
+@@ -101,6 +101,13 @@ class ToolResponse(BaseModel):
+     @model_validator(mode="before")
+     @classmethod
+     def initialize_request(cls, values):
++        # A mode="before" validator receives the raw input, which can be a
++        # non-dict (e.g. None) when ToolResponse is one member of a Union field
++        # like Message.content and the value isn't a ToolResponse. Guard so we
++        # don't crash with `TypeError: argument of type 'NoneType' is not iterable`
++        # — let pydantic fall through to the other union members / raise cleanly.
++        if not isinstance(values, dict):
++            return values
+         if "image" in values and not isinstance(values["image"], list):
+             raise ValueError(
+                 f"Image must be a list, but got {type(values['image'])}. Please check the tool.execute(). "
+diff --git a/verl/trainer/config/_generated_ppo_trainer.yaml b/verl/trainer/config/_generated_ppo_trainer.yaml
+index e1f665d1..f110eda5 100644
+--- a/verl/trainer/config/_generated_ppo_trainer.yaml
++++ b/verl/trainer/config/_generated_ppo_trainer.yaml
+@@ -87,6 +87,7 @@ actor_rollout_ref:
+     use_prefix_grouper: false
+     use_torch_compile: true
+     kl_loss_coef: 0.001
++    pred_sft_coef: 0.0
+     kl_loss_type: low_var_kl
+     ppo_epochs: 1
+     shuffle: false
+diff --git a/verl/trainer/config/actor/actor.yaml b/verl/trainer/config/actor/actor.yaml
+index ce575864..d0262820 100644
+--- a/verl/trainer/config/actor/actor.yaml
++++ b/verl/trainer/config/actor/actor.yaml
+@@ -104,6 +104,74 @@ use_torch_compile: true
+ # KL loss coefficient when use_kl_loss is enabled. For GRPO
+ kl_loss_coef: 0.001
+ 
++# CToM: weight (lambda) of the auxiliary "predict-next-user-turn" SFT loss added
++# jointly with the PPO loss in the actor update. 0 disables the feature.
++pred_sft_coef: 0.0
++
++# CToM: schedule for pred_sft_coef, as fractions of total training steps:
++# linear ramp 0 -> pred_sft_coef over [0, warmup_frac), hold, then linear decay
++# to pred_sft_coef_final over [decay_start_frac, 1]. A negative final value
++# disables the schedule (constant pred_sft_coef), which is the default.
++pred_sft_coef_final: -1.0
++pred_sft_coef_warmup_frac: 0.0
++pred_sft_coef_decay_start_frac: 1.0
++
++# CToM: in the joint PPO + aux-SFT step, measure each term's gradient on its own
++# (park the PPO grad, back the aux term alone, sum them back) so the update logs
++# actor/grad_norm_pg, actor/grad_norm_aux and actor/grad_cos_aux_pg. The parameter
++# update is unchanged; costs two extra grad-norm all-reduces and one clone of the
++# trainable grads per mini-batch. Ignored when pred_sft_coef == 0.
++pred_sft_grad_diag: true
++
++# CToM: ceiling on the auxiliary SFT gradient, as a MULTIPLE of the policy-gradient
++# norm. After both terms are measured separately the aux gradient is rescaled in
++# place so ||g_aux|| <= pred_sft_grad_ratio_cap * ||g_pg||, then the two are summed.
++# 0 disables the cap (historical behaviour). Unlike a small fixed pred_sft_coef this
++# HOLDS the ratio as the SFT loss decays. Implies pred_sft_grad_diag.
++# Measured at coef 0.1 (run 904892 vs 908998): uncapped ||g_aux||/||g_pg|| is 17-25x
++# at step 1 and still 3-4x at step 180, i.e. the SFT term owns the update direction.
++pred_sft_grad_ratio_cap: 0.5
++
++# CToM: drop aux-loss supervision slots whose target is only the user
++# simulator's termination signal (~30% of expert-only prediction targets).
++pred_sft_skip_terminate: true
++
++# CToM sft_v3: independently bounded answer and prediction generation phases.
++pred_answer_max_tokens: 768
++pred_prediction_max_tokens: 192
++
++# CToM sft_v4: bound on the revision phase (the visible answer). In sft_v4
++# pred_answer_max_tokens bounds the internal draft instead.
++pred_revision_max_tokens: 768
++
++# CToM sft_v6 (BDR, the retired BDR predecessor): phase caps for the draft (0 ->
++# pred_answer_max_tokens), belief and ask phases; max internal REVISE turns per
++# user round; counterfactual self-revision samples per replied turn (VOI gate).
++bdr_draft_max_tokens: 0
++bdr_belief_max_tokens: 256
++bdr_ask_max_tokens: 512
++bdr_max_internal_revisions: 1
++bdr_cf_samples: 2
++
++# CToM sft_v7 (the paper's method section): think / ask caps, prediction-gated
++# inner-revision cap per round, verdict source. Draft cap = bdr_draft_max_tokens
++# (0 -> pred_answer_max_tokens); prediction cap = pred_prediction_max_tokens.
++v7_think_max_tokens: 256
++v7_ask_max_tokens: 512
++v7_max_inner_revisions: 3
++v7_verdict_mode: parse
++v7_action_protocol: legacy
++decision_entropy_coef: 0.0
++
++# CToM sft_v3: include the prediction phase in the PPO loss (response_mask=1).
++# False keeps the historical behaviour (prediction masked out of policy gradient).
++pred_in_ppo: false
++
++# Detached prediction NLL reward credited to the answer policy.
++pred_nll_reward_coef: 0.0
++pred_nll_reward_transform: neg_nll
++pred_nll_max: 20.0
++
+ # Type of KL divergence loss. Options: "kl"(k1), "abs", "mse"(k2), "low_var_kl"(k3), "full"
+ kl_loss_type: low_var_kl
+ 
+@@ -310,4 +378,3 @@ qat:
+ 
+   # Path to vLLM quantization config JSON file
+   quantization_config_path: null
+-
+diff --git a/verl/trainer/main_ppo.py b/verl/trainer/main_ppo.py
+index c3672521..f3591931 100644
+--- a/verl/trainer/main_ppo.py
++++ b/verl/trainer/main_ppo.py
+@@ -20,6 +20,7 @@ import socket
+ 
+ import hydra
+ import ray
++import weave
+ from omegaconf import OmegaConf
+ 
+ from verl.experimental.dataset.sampler import AbstractSampler
+diff --git a/verl/trainer/ppo/core_algos.py b/verl/trainer/ppo/core_algos.py
+index 227c1afb..d44bd90f 100644
+--- a/verl/trainer/ppo/core_algos.py
++++ b/verl/trainer/ppo/core_algos.py
+@@ -259,7 +259,14 @@ def compute_gae_advantage_return(
+         advantages = torch.stack(advantages_reversed[::-1], dim=1)
+ 
+         returns = advantages + values
+-        advantages = verl_F.masked_whiten(advantages, response_mask)
++        # Robustness (CToM local patch): if a whole batch is skipped / empty-rollout
++        # samples (e.g. a user-sim backend crash makes every q0 fail), response_mask
++        # is all-zero and masked_whiten -> masked_var raises ("at least one element
++        # ... has to be 1" / "sum of the mask is one"). Skip whitening in that
++        # degenerate case (advantages are ~0, so the step is gradient-neutral)
++        # instead of crashing the entire run on a transient infra hiccup.
++        if response_mask.sum() > 1:
++            advantages = verl_F.masked_whiten(advantages, response_mask)
+     return advantages, returns
+ 
+ 
+diff --git a/verl/trainer/ppo/ray_trainer.py b/verl/trainer/ppo/ray_trainer.py
+index e6cf4868..06ea20c6 100644
+--- a/verl/trainer/ppo/ray_trainer.py
++++ b/verl/trainer/ppo/ray_trainer.py
+@@ -277,6 +277,19 @@ class RayPPOTrainer:
+         self.tokenizer = tokenizer
+         self.processor = processor
+         self.config = config
++        if config.actor_rollout_ref.actor.get("v7_action_protocol", "legacy") == "categorical_v1":
++            actor, model, rollout = config.actor_rollout_ref.actor, config.actor_rollout_ref.model, config.actor_rollout_ref.rollout
++            reward_kwargs = config.reward.get("reward_kwargs", {}) or config.reward.reward_model.get("reward_kwargs", {})
++            if reward_kwargs.get("prediction_mode") != "sft_v7":
++                raise ValueError("categorical_v1 requires prediction_mode=sft_v7")
++            if actor.strategy not in ("fsdp", "fsdp2") or not model.get("use_remove_padding", False) or model.get("use_fused_kernels", False):
++                raise ValueError("categorical_v1 requires FSDP/FSDP2, use_remove_padding=True, use_fused_kernels=False")
++            if rollout.name != "vllm" or rollout.get("logprobs_mode") != "processed_logprobs" or not rollout.get("calculate_log_probs", False):
++                raise ValueError("categorical_v1 requires vLLM processed_logprobs and calculate_log_probs=True")
++            if rollout.temperature <= 0:
++                raise ValueError("categorical_v1 training requires positive sampling temperature")
++            from ctom.controller import action_token_ids
++            action_token_ids(lambda text: tokenizer(text, add_special_tokens=False)["input_ids"])
+ 
+         self.hybrid_engine = config.actor_rollout_ref.hybrid_engine
+         assert self.hybrid_engine, "Currently, only support hybrid engine"
+@@ -1188,6 +1201,690 @@ class RayPPOTrainer:
+         old_log_prob = DataProto.from_tensordict(old_log_prob)
+         return old_log_prob, old_log_prob_mfu
+ 
++    def _compute_actor_target_log_prob(self, batch: DataProto) -> DataProto:
++        """Forward-only current-policy log probabilities for target responses."""
++        batch_td = left_right_2_no_padding(batch.to_tensordict())
++        tu.assign_non_tensor(
++            batch_td,
++            calculate_entropy=False,
++            compute_loss=False,
++            temperature=float(self.config.actor_rollout_ref.rollout.temperature),
++        )
++        output = self.actor_rollout_wg.compute_log_prob(batch_td)
++        log_probs = no_padding_2_padding(tu.get(output, "log_probs"), batch_td)
++        return DataProto.from_tensordict(
++            tu.get_tensordict({"target_log_probs": log_probs.float()})
++        )
++
++    def _compute_prediction_nll_reward(self, batch: DataProto):
++        """Score valid sft_v3 targets and credit them to answer boundaries."""
++        actor_cfg = self.config.actor_rollout_ref.actor
++        coef = float(getattr(actor_cfg, "pred_nll_reward_coef", 0.0) or 0.0)
++        dense = torch.zeros_like(batch.batch["responses"], dtype=torch.float32)
++        # sft_v4 reuses the sft_v3 scoring contract verbatim: the agent loop
++        # snapshots prediction_context_ids at the same slot (right after
++        # PREDICTION_START) and the target is still the real next user turn, so
++        # the row builder needs no mode-specific branch. Only the boundary the
++        # credit lands on differs, and that arrives via turn_end_indices.
++        if self._ctom_prediction_mode() not in ("sft_v3", "sft_v4", "sft_v5", "sft_v7") or coef == 0.0:
++            return dense, {}
++
++        from ctom.prediction_loss import (
++            build_prediction_sft_v3_rows,
++            prediction_log_probs_to_reward,
++        )
++
++        msgs_col = batch.non_tensor_batch.get("messages", None)
++        contexts_col = batch.non_tensor_batch.get("prediction_context_ids", None)
++        validity_col = batch.non_tensor_batch.get("phase_validity", None)
++        boundaries_col = batch.non_tensor_batch.get("turn_end_indices", None)
++        tef_col = batch.non_tensor_batch.get("tool_extra_fields", None)
++
++        def _extra(i, key, direct, default):
++            if direct is not None:
++                return direct[i]
++            if tef_col is not None:
++                return tef_col[i].get(key, default)
++            return default
++
++        scorer_rows = []
++        row_map = []
++        candidate_turns = 0
++        invalid_turns = 0
++        max_len = int(self.config.actor_rollout_ref.rollout.max_model_len)
++        for batch_index in range(len(batch)):
++            holder = _extra(batch_index, "messages", msgs_col, {})
++            conv = holder.get("messages", []) if isinstance(holder, dict) else (holder or [])
++            if len(conv) == 1 and isinstance(conv[0], list):
++                conv = conv[0]
++            raw_contexts = _extra(
++                batch_index, "prediction_context_ids", contexts_col, []
++            )
++            raw_validities = _extra(
++                batch_index, "phase_validity", validity_col, []
++            )
++            raw_boundaries = _extra(
++                batch_index, "turn_end_indices", boundaries_col, []
++            )
++            contexts = [] if raw_contexts is None else list(raw_contexts)
++            validities = [] if raw_validities is None else list(raw_validities)
++            boundaries = [] if raw_boundaries is None else list(raw_boundaries)
++            if not conv or not contexts:
++                continue
++            rows = build_prediction_sft_v3_rows(
++                contexts, conv, self.tokenizer, max_len=max_len
++            )
++            for row in rows:
++                candidate_turns += 1
++                turn = int(row["turn_index"])
++                validity = validities[turn] if turn < len(validities) else {}
++                boundary = boundaries[turn] if turn < len(boundaries) else None
++                if not (
++                    validity.get("answer_valid", False)
++                    and validity.get("prediction_valid", False)
++                ):
++                    invalid_turns += 1
++                    continue
++                if boundary is None or not (0 <= int(boundary) < dense.shape[1]):
++                    continue
++                scorer_rows.append(row)
++                row_map.append((batch_index, turn, int(boundary)))
++
++        if not scorer_rows:
++            return dense, {
++                "reward/pred_nll_scored_turns": 0.0,
++                "reward/pred_nll_mean": 0.0,
++                "reward/pred_nll_candidate_turns": float(candidate_turns),
++                "reward/pred_nll_invalid_turns": float(invalid_turns),
++            }
++
++        pad_id = self.tokenizer.pad_token_id
++        if pad_id is None:
++            pad_id = self.tokenizer.eos_token_id or 0
++        contexts = [row["input_ids"][: row["target_start"]] for row in scorer_rows]
++        targets = [row["input_ids"][row["target_start"] :] for row in scorer_rows]
++        max_prompt = max(len(ids) for ids in contexts)
++        max_response = max(len(ids) for ids in targets)
++
++        prompts, responses, attention_masks, position_ids, response_masks = (
++            [], [], [], [], []
++        )
++        for context_ids, target_ids in zip(contexts, targets, strict=True):
++            prompt_pad = max_prompt - len(context_ids)
++            response_pad = max_response - len(target_ids)
++            prompt = [pad_id] * prompt_pad + context_ids
++            response = target_ids + [pad_id] * response_pad
++            attention = (
++                [0] * prompt_pad
++                + [1] * len(context_ids)
++                + [1] * len(target_ids)
++                + [0] * response_pad
++            )
++            positions = torch.tensor(attention).cumsum(0).sub(1).clamp_min(0).tolist()
++            prompts.append(prompt)
++            responses.append(response)
++            attention_masks.append(attention)
++            position_ids.append(positions)
++            response_masks.append([1] * len(target_ids) + [0] * response_pad)
++
++        score_batch = DataProto.from_single_dict(
++            {
++                "prompts": torch.tensor(prompts, dtype=torch.long),
++                "responses": torch.tensor(responses, dtype=torch.long),
++                "input_ids": torch.tensor(
++                    [p + r for p, r in zip(prompts, responses, strict=True)], dtype=torch.long
++                ),
++                "attention_mask": torch.tensor(attention_masks, dtype=torch.long),
++                "position_ids": torch.tensor(position_ids, dtype=torch.long),
++                "response_mask": torch.tensor(response_masks, dtype=torch.long),
++            }
++        )
++        dp_size = self._get_dp_size(self.actor_rollout_wg, "actor")
++        score_batch, pad_size = pad_dataproto_to_divisor(score_batch, dp_size)
++        scored = self._compute_actor_target_log_prob(score_batch)
++        if pad_size:
++            scored = unpad_dataproto(scored, pad_size)
++
++        transform = str(getattr(actor_cfg, "pred_nll_reward_transform", "neg_nll"))
++        max_nll = float(getattr(actor_cfg, "pred_nll_max", 20.0))
++        turn_scores = []
++        target_log_probs = scored.batch["target_log_probs"]
++        for row_index, ((batch_index, _turn, boundary), target_ids) in enumerate(
++            zip(row_map, targets, strict=True)
++        ):
++            target_len = len(target_ids)
++            score = prediction_log_probs_to_reward(
++                target_log_probs[row_index, :target_len],
++                torch.ones(target_len, dtype=torch.long),
++                transform=transform,
++                max_nll=max_nll,
++            )
++            dense[batch_index, boundary] += coef * score
++            turn_scores.append(score)
++
++        return dense, {
++            "reward/pred_nll_scored_turns": float(len(turn_scores)),
++            "reward/pred_nll_mean": float(sum(turn_scores) / len(turn_scores)),
++            "reward/pred_nll_candidate_turns": float(candidate_turns),
++            "reward/pred_nll_invalid_turns": float(invalid_turns),
++            "reward/pred_nll_reward_mean": float(
++                coef * sum(turn_scores) / len(turn_scores)
++            ),
++        }
++
++
++    def _scheduled_pred_sft_coef(self) -> float:
++        """pred_sft_coef for the CURRENT step, under the warmup/hold/decay schedule.
++
++        Fractions of total training steps rather than absolute steps, so the same
++        schedule means the same thing when the dataset size changes (expert-only
++        filtering halves the step count at fixed epochs).
++
++        With pred_sft_coef_final < 0 the schedule is off and the constant
++        pred_sft_coef is returned — the behaviour of every run before this.
++        """
++        actor_cfg = self.config.actor_rollout_ref.actor
++        peak = float(getattr(actor_cfg, "pred_sft_coef", 0.0) or 0.0)
++        final = float(getattr(actor_cfg, "pred_sft_coef_final", -1.0))
++        if peak <= 0 or final < 0:
++            return peak
++
++        total = int(getattr(self, "total_training_steps", 0) or 0)
++        if total <= 0:
++            return peak
++        # global_steps is 1-based inside fit(); map step 1 -> 0.0 and the final
++        # step -> exactly 1.0, so the decay actually lands on pred_sft_coef_final.
++        frac = max(0.0, min(1.0, (int(getattr(self, "global_steps", 1)) - 1) / max(1, total - 1)))
++
++        warm = float(getattr(actor_cfg, "pred_sft_coef_warmup_frac", 0.0) or 0.0)
++        dstart = float(getattr(actor_cfg, "pred_sft_coef_decay_start_frac", 1.0))
++        warm = max(0.0, min(1.0, warm))
++        dstart = max(warm, min(1.0, dstart))
++
++        if frac < warm:
++            # Ramp from a small floor rather than 0 so the aux columns are still
++            # built on step 1 (coef <= 0 would skip them and hide the loss metric).
++            return peak * max(1e-3, frac / warm) if warm > 0 else peak
++        if frac < dstart:
++            return peak
++        if dstart >= 1.0:
++            return peak
++        t = (frac - dstart) / (1.0 - dstart)
++        return peak + (final - peak) * t
++
++    def _push_pred_sft_coef(self) -> float:
++        """Send the scheduled coefficient to the actor workers when it changes.
++
++        The worker binds aux_coef once at setup, so without this the schedule
++        would change only the trainer-side gate and not the actual loss weight.
++        """
++        coef = self._scheduled_pred_sft_coef()
++        peak = float(getattr(self.config.actor_rollout_ref.actor, "pred_sft_coef", 0.0) or 0.0)
++        final = float(getattr(self.config.actor_rollout_ref.actor, "pred_sft_coef_final", -1.0))
++        if peak <= 0 or final < 0:
++            return coef  # schedule disabled; worker already holds the constant
++        prev = getattr(self, "_last_pushed_aux_coef", None)
++        if prev is None or abs(prev - coef) > 1e-9:
++            # NOT telemetry: this IS the loss weight. A failed push leaves the
++            # worker on the static config value while actor/pred_sft_coef keeps
++            # logging the schedule, so the run looks correct and is not (see
++            # 904892, which trained at a flat 0.1 for all 180 steps). Die instead.
++            try:
++                self.actor_rollout_wg.set_aux_coef(coef)
++            except Exception as exc:
++                raise RuntimeError(
++                    "[pred_sft] could not push the scheduled aux coefficient to the "
++                    f"actor workers ({exc!r}). The applied weight would silently stay "
++                    "at the static actor.pred_sft_coef while actor/pred_sft_coef logs "
++                    "the schedule. Refusing to train a run that misreports its own "
++                    "objective; disable the schedule with pred_sft_coef_final<0 to run "
++                    "at a constant coefficient on purpose."
++                ) from exc
++            self._last_pushed_aux_coef = coef
++        return coef
++
++    def _build_pred_sft_columns(self, batch: DataProto, batch_td):
++        """CToM:  attach per-row "predict-next-user-turn" SFT sequences
++        as nested-tensor columns (sft_input_ids / sft_position_ids /
++        sft_loss_mask) on the no-padding actor batch. Row-aligned 1:1 with the
++        PPO rows so they ride through mini-batching and land in the same step.
++
++        Rows without a usable (assistant, next-user) pair get a 1-token
++        placeholder with an all-zero loss mask (no gradient contribution).
++        Columns are only attached when at least one row has real targets.
++        """
++        coef = self._scheduled_pred_sft_coef()
++        if coef <= 0:
++            return batch_td
++
++        # sft_v2 swaps the sequence builder: per-turn on-policy-context rows
++        # instead of one teacher-forced sequence per conversation.
++        if self._ctom_prediction_mode() == "sft_v2":
++            return self._build_pred_sft_v2_columns(batch, batch_td, coef)
++        # sft_v4/v5 share sft_v3's snapshot contract (see _compute_prediction_nll_reward).
++        # v5 differs only in the TARGET, injected via targets_override below.
++        if self._ctom_prediction_mode() in ("sft_v3", "sft_v4", "sft_v5", "sft_v7"):
++            return self._build_pred_sft_v3_columns(batch, batch_td, coef)
++
++        from ctom.prediction_loss import build_prediction_sft_sequence
++
++        # The rollout's per-sample conversation is flattened into the main batch's
++        # non_tensor_batch under "messages" (extra_fields key) — value is
++        # {"messages": <list-of-conversations>}. (The reward path wraps the same
++        # data under "tool_extra_fields"; fall back to it just in case.)
++        msgs_col = batch.non_tensor_batch.get("messages", None)
++        tef_col = batch.non_tensor_batch.get("tool_extra_fields", None)
++        if msgs_col is None and tef_col is None:
++            print(
++                "[pred_sft] WARNING: no 'messages'/'tool_extra_fields' in batch; "
++                f"skipping aux SFT loss this step. non_tensor keys={list(batch.non_tensor_batch.keys())}"
++            )
++            return batch_td
++
++        def _conv_for_row(i):
++            if msgs_col is not None:
++                holder = msgs_col[i]
++            else:
++                holder = tef_col[i].get("messages", {})
++            conv = holder.get("messages", []) if isinstance(holder, dict) else (holder or [])
++            if len(conv) == 1 and isinstance(conv[0], list):
++                conv = conv[0]
++            return conv
++
++        n = batch_td.batch_size[0]
++        max_seq_len = tu.get_non_tensor_data(data=batch_td, key="max_seq_len", default=None)
++        pad_id = self.tokenizer.pad_token_id
++        if pad_id is None:
++            pad_id = self.tokenizer.eos_token_id or 0
++
++        # Must match the parquet's baked-in system prompt, or the aux loss
++        # teacher-forces a format the rollout prompt never asked for.
++        pred_sft_fmt = self._ctom_pred_sft_format()
++        self._warn_pred_sft_format_mismatch(_conv_for_row(0), pred_sft_fmt)
++
++        ii, pi, lm, n_valid = [], [], [], 0
++        n_empty, n_notarget, _dumped = 0, 0, False
++        for i in range(n):
++            seq = None
++            conv = []
++            try:
++                conv = _conv_for_row(i)
++                if conv:
++                    seq = build_prediction_sft_sequence(
++                        conv, self.tokenizer, max_len=max_seq_len, fmt=pred_sft_fmt
++                    )
++            except Exception as e:  # noqa: BLE001 - fail-open per row
++                print(f"[pred_sft] row {i} build failed ({e}); using placeholder")
++                seq = None
++            # Diagnostics: characterize why rows lack SFT targets.
++            if not conv:
++                n_empty += 1
++            elif seq is None:
++                n_notarget += 1
++                if not _dumped:  # dump ONE non-empty-but-no-target conversation
++                    _dumped = True
++                    from ctom.utils import _get_role, _get_content
++                    roles = [_get_role(m) for m in conv]
++                    last = _get_content(conv[-1])[:120] if conv else ""
++                    print(f"[pred_sft][diag] row {i}: non-empty but no target. "
++                          f"len={len(conv)} roles={roles} last_content={last!r}")
++            if seq is None:
++                ii.append(torch.tensor([pad_id], dtype=torch.long))
++                pi.append(torch.tensor([0], dtype=torch.long))
++                lm.append(torch.tensor([0], dtype=torch.long))
++            else:
++                ii.append(torch.tensor(seq["input_ids"], dtype=torch.long))
++                pi.append(torch.tensor(seq["position_ids"], dtype=torch.long))
++                lm.append(torch.tensor(seq["loss_mask"], dtype=torch.long))
++                n_valid += 1
++
++        if n_valid == 0:
++            print(
++                f"[pred_sft] WARNING: no usable SFT sequences this step (rows={n}, "
++                f"empty_convs={n_empty}, nonempty_no_target={n_notarget}); skipping aux SFT loss"
++            )
++            return batch_td
++
++        batch_td["sft_input_ids"] = torch.nested.as_nested_tensor(ii, layout=torch.jagged)
++        batch_td["sft_position_ids"] = torch.nested.as_nested_tensor(pi, layout=torch.jagged)
++        batch_td["sft_loss_mask"] = torch.nested.as_nested_tensor(lm, layout=torch.jagged)
++        total_sft_tokens = int(sum(int(t.sum()) for t in lm))
++        print(
++            f"[pred_sft] attached SFT columns: rows={n}, with_targets={n_valid}, "
++            f"empty_convs={n_empty}, nonempty_no_target={n_notarget}, "
++            f"sft_loss_tokens={total_sft_tokens}, coef={coef}"
++        )
++        return batch_td
++
++    def _ctom_prediction_mode(self) -> str:
++        """Read reward_kwargs.prediction_mode the same way CToMRewardManager
++        does (reward.reward_kwargs first, reward.reward_model.reward_kwargs as
++        fallback). Defaults to "f1" when unset/unreadable."""
++        try:
++            rk = self.config.reward.get("reward_kwargs", {}) or {}
++            if not rk:
++                rk = self.config.reward.reward_model.get("reward_kwargs", {}) or {}
++            return str(rk.get("prediction_mode", "f1")).lower()
++        except Exception:  # noqa: BLE001 - config shape varies across entrypoints
++            return "f1"
++
++    def _warn_pred_sft_format_mismatch(self, conv, fmt) -> None:
++        """Loudly flag a pred_sft_format that disagrees with the parquet prompt.
++
++        This mismatch fails SILENTLY otherwise: the builder writes the assistant
++        turns itself, so its own markers are always found and no span-location
++        warning fires. The run trains, logs a plausible aux loss, and quietly
++        teaches the policy a format the rollout prompt never asked for. Checked
++        once per attach; cost is one string scan.
++        """
++        if getattr(self, "_pred_sft_fmt_checked", False):
++            return
++        self._pred_sft_fmt_checked = True
++        try:
++            from ctom.utils import _get_content, _get_role
++
++            system = next(
++                (_get_content(m) for m in (conv or []) if _get_role(m) == "system"), ""
++            )
++            if not system:
++                return
++            if "[ANTICIPATED]" in system:
++                expected = "v7"  # sft_v7 decide / draft-predict-revise protocol
++            elif "[REVISION_START]" in system:
++                expected = "revise"  # sft_v4 draft/prediction/revision protocol
++            elif "[ANSWER_START]" in system:
++                expected = "tag"
++            else:
++                expected = "json"
++            if expected != fmt:
++                print(
++                    "=" * 78 + "\n"
++                    f"[pred_sft] FORMAT MISMATCH: parquet system prompt looks like "
++                    f"'{expected}' but reward_kwargs.pred_sft_format='{fmt}'.\n"
++                    f"[pred_sft] The auxiliary loss will teacher-force '{fmt}' while the "
++                    f"rollout prompt asks for '{expected}' — these fight each other.\n"
++                    f"[pred_sft] Set reward_kwargs.pred_sft_format={expected} and restart.\n"
++                    + "=" * 78
++                )
++            else:
++                print(f"[pred_sft] format check OK: prompt and pred_sft_format agree ('{fmt}')")
++        except Exception as e:  # noqa: BLE001 - diagnostic must never break training
++            print(f"[pred_sft] format check skipped ({e})")
++
++    def _ctom_pred_sft_format(self) -> str:
++        """Output format the pred_sft auxiliary loss should teacher-force.
++
++        MUST match the system prompt baked into the RL parquet: "json" for
++        build_math.SYSTEM_PROMPT, "tag" for TAG_SYSTEM_PROMPT. Defaults to
++        "json" so every pre-2026-07-20 run keeps its exact behaviour.
++        """
++        try:
++            rk = self.config.reward.get("reward_kwargs", {}) or {}
++            if not rk:
++                rk = self.config.reward.reward_model.get("reward_kwargs", {}) or {}
++            return str(rk.get("pred_sft_format", "json")).lower()
++        except Exception:  # noqa: BLE001 - config shape varies across entrypoints
++            return "json"
++
++    def _build_pred_sft_v2_columns(self, batch: DataProto, batch_td, coef: float):
++        """sft_v2 mode: per-turn ON-POLICY-context SFT rows.
++
++        For each scored assistant turn t, the context is the ACTUAL rollout
++        tokens (prompt + response) up to the start of turn t's prediction-value
++        span — sampled predictions of earlier turns included — and the target
++        is the real next user turn spliced in place of the sampled one
++        (ctom.prediction_loss.build_prediction_sft_v2_rows).
++
++        A conversation's T per-turn rows are PACKED into its single batch row
++        (flat concat + a per-row `sft_seq_lens` column), preserving the 1:1 row
++        alignment the mini-batch split / DP dispatch machinery relies on. The
++        actor worker unpacks them into separate aux rows right before the
++        forward (see engine_workers._build_sft_td).
++        """
++        from ctom.prediction_loss import build_prediction_sft_v2_rows
++
++        msgs_col = batch.non_tensor_batch.get("messages", None)
++        tef_col = batch.non_tensor_batch.get("tool_extra_fields", None)
++        spans_col = batch.non_tensor_batch.get("pred_value_spans", None)
++        if (msgs_col is None and tef_col is None) or (spans_col is None and tef_col is None):
++            print(
++                "[pred_sft_v2] WARNING: missing 'messages'/'pred_value_spans' in batch; "
++                f"skipping aux SFT loss this step. non_tensor keys={list(batch.non_tensor_batch.keys())}"
++            )
++            return batch_td
++
++        def _conv_for_row(i):
++            if msgs_col is not None:
++                holder = msgs_col[i]
++            else:
++                holder = tef_col[i].get("messages", {})
++            conv = holder.get("messages", []) if isinstance(holder, dict) else (holder or [])
++            if len(conv) == 1 and isinstance(conv[0], list):
++                conv = conv[0]
++            return conv
++
++        def _spans_for_row(i):
++            # Stored FLAT (list of [start, end) pairs) — never unwrap: a
++            # single-turn row is [[s, e]], which unwrapping would corrupt.
++            sp = spans_col[i] if spans_col is not None else tef_col[i].get("pred_value_spans", [])
++            return list(sp) if sp is not None else []
++
++        n = batch_td.batch_size[0]
++        max_seq_len = tu.get_non_tensor_data(data=batch_td, key="max_seq_len", default=None)
++        pad_id = self.tokenizer.pad_token_id
++        if pad_id is None:
++            pad_id = self.tokenizer.eos_token_id or 0
++
++        prompts = batch.batch["prompts"]
++        responses = batch.batch["responses"]
++        attn = batch.batch["attention_mask"]
++        prompt_len = prompts.shape[-1]
++
++        ii, pi, lm, sl = [], [], [], []
++        n_convs_with_rows, n_rows_total, total_sft_tokens = 0, 0, 0
++        n_empty, n_norows = 0, 0
++        for i in range(n):
++            rows = []
++            try:
++                conv = _conv_for_row(i)
++                spans = _spans_for_row(i)
++                if not conv or not spans:
++                    n_empty += 1
++                else:
++                    prompt_valid = prompts[i][attn[i, :prompt_len].bool()].tolist()
++                    resp_valid_len = int(attn[i, prompt_len:].sum().item())
++                    resp_valid = responses[i][:resp_valid_len].tolist()
++                    rows = build_prediction_sft_v2_rows(
++                        prompt_valid, resp_valid, spans, conv,
++                        self.tokenizer, max_len=max_seq_len,
++                    )
++                    if not rows:
++                        n_norows += 1
++            except Exception as e:  # noqa: BLE001 - fail-open per row
++                print(f"[pred_sft_v2] row {i} build failed ({e}); using placeholder")
++                rows = []
++            if not rows:
++                ii.append(torch.tensor([pad_id], dtype=torch.long))
++                pi.append(torch.tensor([0], dtype=torch.long))
++                lm.append(torch.tensor([0], dtype=torch.long))
++                sl.append(torch.tensor([1], dtype=torch.long))
++            else:
++                flat_ii, flat_pi, flat_lm, lens = [], [], [], []
++                for r in rows:
++                    flat_ii.extend(r["input_ids"])
++                    flat_pi.extend(r["position_ids"])
++                    flat_lm.extend(r["loss_mask"])
++                    lens.append(len(r["input_ids"]))
++                ii.append(torch.tensor(flat_ii, dtype=torch.long))
++                pi.append(torch.tensor(flat_pi, dtype=torch.long))
++                lm.append(torch.tensor(flat_lm, dtype=torch.long))
++                sl.append(torch.tensor(lens, dtype=torch.long))
++                n_convs_with_rows += 1
++                n_rows_total += len(rows)
++                total_sft_tokens += sum(flat_lm)
++
++        if n_convs_with_rows == 0:
++            print(
++                f"[pred_sft_v2] WARNING: no usable SFT rows this step (rows={n}, "
++                f"empty_or_no_spans={n_empty}, spans_but_no_rows={n_norows}); "
++                "skipping aux SFT loss"
++            )
++            return batch_td
++
++        batch_td["sft_input_ids"] = torch.nested.as_nested_tensor(ii, layout=torch.jagged)
++        batch_td["sft_position_ids"] = torch.nested.as_nested_tensor(pi, layout=torch.jagged)
++        batch_td["sft_loss_mask"] = torch.nested.as_nested_tensor(lm, layout=torch.jagged)
++        batch_td["sft_seq_lens"] = torch.nested.as_nested_tensor(sl, layout=torch.jagged)
++        print(
++            f"[pred_sft_v2] attached SFT columns: convs={n}, convs_with_rows={n_convs_with_rows}, "
++            f"turn_rows={n_rows_total}, empty_or_no_spans={n_empty}, spans_but_no_rows={n_norows}, "
++            f"sft_loss_tokens={total_sft_tokens}, coef={coef}"
++        )
++        return batch_td
++
++    def _build_pred_sft_v3_columns(self, batch: DataProto, batch_td, coef: float):
++        """Attach snapshot-based per-turn sft_v3 rows to the joint actor batch."""
++        from ctom.prediction_loss import build_prediction_sft_v3_rows
++
++        msgs_col = batch.non_tensor_batch.get("messages", None)
++        tef_col = batch.non_tensor_batch.get("tool_extra_fields", None)
++        contexts_col = batch.non_tensor_batch.get("prediction_context_ids", None)
++        if (msgs_col is None and tef_col is None) or (
++            contexts_col is None and tef_col is None
++        ):
++            print(
++                "[pred_sft_v3] WARNING: missing messages/prediction_context_ids; "
++                f"skipping aux loss. keys={list(batch.non_tensor_batch.keys())}"
++            )
++            return batch_td
++
++        def _conv_for_row(i):
++            holder = (
++                msgs_col[i]
++                if msgs_col is not None
++                else tef_col[i].get("messages", {})
++            )
++            conv = holder.get("messages", []) if isinstance(holder, dict) else (holder or [])
++            if len(conv) == 1 and isinstance(conv[0], list):
++                conv = conv[0]
++            return conv
++
++        def _contexts_for_row(i):
++            contexts = (
++                contexts_col[i]
++                if contexts_col is not None
++                else tef_col[i].get("prediction_context_ids", [])
++            )
++            return list(contexts) if contexts is not None else []
++
++        # sft_v5: per-turn counterfactual reaction to the DRAFT. When present it
++        # REPLACES the real next user turn as the teacher-forced target, because
++        # the real turn was a reaction to the revision while the supervised
++        # context ends at the draft. Absent (sft_v3/v4) -> unchanged behaviour.
++        cf_col = batch.non_tensor_batch.get("counterfactual_targets", None)
++
++        def _counterfactual_for_row(i):
++            if self._ctom_prediction_mode() not in ("sft_v5", "sft_v7"):
++                return None
++            vals = (
++                cf_col[i]
++                if cf_col is not None
++                else (tef_col[i].get("counterfactual_targets", []) if tef_col is not None else [])
++            )
++            vals = list(vals) if vals is not None else []
++            return vals or None
++
++        n = batch_td.batch_size[0]
++        max_seq_len = tu.get_non_tensor_data(
++            data=batch_td, key="max_seq_len", default=None
++        )
++        pad_id = self.tokenizer.pad_token_id
++        if pad_id is None:
++            pad_id = self.tokenizer.eos_token_id or 0
++
++        ii, pi, lm, sl = [], [], [], []
++        n_convs_with_rows = 0
++        n_rows_total = 0
++        total_sft_tokens = 0
++        n_missing = 0
++        n_norows = 0
++        for i in range(n):
++            rows = []
++            try:
++                conv = _conv_for_row(i)
++                contexts = _contexts_for_row(i)
++                if not conv or not contexts:
++                    n_missing += 1
++                else:
++                    rows = build_prediction_sft_v3_rows(
++                        contexts,
++                        conv,
++                        self.tokenizer,
++                        max_len=max_seq_len,
++                        targets_override=_counterfactual_for_row(i),
++                        skip_terminate=bool(getattr(
++                            self.config.actor_rollout_ref.actor,
++                            "pred_sft_skip_terminate", True)),
++                    )
++                    if not rows:
++                        n_norows += 1
++            except Exception as exc:
++                print(
++                    f"[pred_sft_v3] row {i} build failed ({exc}); using placeholder"
++                )
++                rows = []
++
++            if not rows:
++                ii.append(torch.tensor([pad_id], dtype=torch.long))
++                pi.append(torch.tensor([0], dtype=torch.long))
++                lm.append(torch.tensor([0], dtype=torch.long))
++                sl.append(torch.tensor([1], dtype=torch.long))
++                continue
++
++            flat_ii, flat_pi, flat_lm, lens = [], [], [], []
++            for row in rows:
++                flat_ii.extend(row["input_ids"])
++                flat_pi.extend(row["position_ids"])
++                flat_lm.extend(row["loss_mask"])
++                lens.append(len(row["input_ids"]))
++            ii.append(torch.tensor(flat_ii, dtype=torch.long))
++            pi.append(torch.tensor(flat_pi, dtype=torch.long))
++            lm.append(torch.tensor(flat_lm, dtype=torch.long))
++            sl.append(torch.tensor(lens, dtype=torch.long))
++            n_convs_with_rows += 1
++            n_rows_total += len(rows)
++            total_sft_tokens += sum(flat_lm)
++
++        if n_convs_with_rows == 0:
++            print(
++                f"[pred_sft_v3] WARNING: no usable rows (convs={n}, "
++                f"missing_context={n_missing}, context_but_no_rows={n_norows})"
++            )
++            return batch_td
++
++        batch_td["sft_input_ids"] = torch.nested.as_nested_tensor(
++            ii, layout=torch.jagged
++        )
++        batch_td["sft_position_ids"] = torch.nested.as_nested_tensor(
++            pi, layout=torch.jagged
++        )
++        batch_td["sft_loss_mask"] = torch.nested.as_nested_tensor(
++            lm, layout=torch.jagged
++        )
++        batch_td["sft_seq_lens"] = torch.nested.as_nested_tensor(
++            sl, layout=torch.jagged
++        )
++        if self.config.actor_rollout_ref.actor.get("v7_action_protocol", "legacy") == "categorical_v1":
++            tu.assign_non_tensor(batch_td, sft_target_mean=True)
++        print(
++            f"[pred_sft_v3] attached rows: convs={n}, "
++            f"convs_with_rows={n_convs_with_rows}, turn_rows={n_rows_total}, "
++            f"missing_context={n_missing}, context_but_no_rows={n_norows}, "
++            f"sft_loss_tokens={total_sft_tokens}, coef={coef}"
++        )
++        return batch_td
++
++
+     def _update_actor(self, batch: DataProto) -> DataProto:
+         rollout_config = self.config.actor_rollout_ref.rollout
+         batch.meta_info["multi_turn"] = rollout_config.multi_turn.enable
+@@ -1197,6 +1894,10 @@ class RayPPOTrainer:
+         batch_td = batch.to_tensordict()
+         # step 2: convert from padding to no-padding
+         batch_td = left_right_2_no_padding(batch_td)
++        # CToM: push this step's scheduled aux weight to the workers BEFORE the
++        # update, then attach the auxiliary predict-next-user-turn SFT columns.
++        self._pred_sft_coef_now = self._push_pred_sft_coef()
++        batch_td = self._build_pred_sft_columns(batch, batch_td)
+         calculate_entropy = self.config.actor_rollout_ref.actor.calculate_entropy or (
+             self.config.actor_rollout_ref.actor.entropy_coeff != 0.0
+         )
+@@ -1479,6 +2180,13 @@ class RayPPOTrainer:
+                     with marked_timer("adv", timing_raw, color="brown"):
+                         # we combine with rule-based rm
+                         reward_extra_infos_dict: dict[str, list]
++                        pred_nll_reward, pred_nll_metrics = (
++                            self._compute_prediction_nll_reward(batch)
++                        )
++                        reward_tensor = reward_tensor + pred_nll_reward.to(
++                            reward_tensor.device
++                        )
++                        metrics.update(pred_nll_metrics)
+                         batch.batch["token_level_scores"] = reward_tensor
+ 
+                         if reward_extra_infos_dict:
+@@ -1607,8 +2315,30 @@ class RayPPOTrainer:
+                         "training/epoch": epoch,
+                     }
+                 )
++                # CToM: the scheduled aux weight actually applied this step. Without
++                # this the schedule is invisible in the run log and a mis-specified
++                # warmup/decay would only show up as an unexplained loss shape.
++                if getattr(self, "_pred_sft_coef_now", None) is not None:
++                    metrics["actor/pred_sft_coef"] = float(self._pred_sft_coef_now)
+                 # collect metrics
+                 metrics.update(compute_data_metrics(batch=batch, use_critic=self.use_critic))
++                # Surface scalar reward_extra_info components (e.g. reward/task,
++                # reward/prediction, reward/effort, reward/total and the turn-wise
++                # reward/turn_reward_mean, reward/num_scored_turns) as per-step
++                # wandb metrics. These otherwise only appear at validation.
++                for _rk, _rv in (reward_extra_infos_dict or {}).items():
++                    # CToM: reward extras are forwarded by prefix. "voi/" carries the
++                    # BDR 2x2 cell fractions and gate stats (the retired BDR predecessor);
++                    # smoke 964600 logged every reward/* key and no voi/* key before
++                    # this prefix was added.
++                    if not (isinstance(_rk, str) and _rk.startswith(("reward/", "voi/"))):
++                        continue
++                    try:
++                        _arr = np.asarray(_rv, dtype=np.float32)
++                    except (ValueError, TypeError):
++                        continue
++                    if _arr.size:
++                        metrics[f"{_rk}/mean"] = float(np.mean(_arr))
+                 # GDPO per-component reward metrics
+                 gdpo_reward_keys = self.config.algorithm.get("gdpo_reward_keys", None)
+                 if gdpo_reward_keys and self.config.algorithm.adv_estimator in ("gdpo", AdvantageEstimator.GDPO):
+diff --git a/verl/workers/config/actor.py b/verl/workers/config/actor.py
+index 962b478a..a5cbe758 100644
+--- a/verl/workers/config/actor.py
++++ b/verl/workers/config/actor.py
+@@ -172,6 +172,82 @@ class ActorConfig(BaseConfig):
+     use_torch_compile: bool = True
+     kl_loss_coef: float = 0.001
+     kl_loss_type: str = "low_var_kl"
++    # CToM: weight (lambda) of the auxiliary "predict-next-user-turn" SFT loss
++    # added jointly with the PPO loss in the actor update. 0 disables the feature
++    # (no SFT batch is built and prediction tokens stay in the PPO response).
++    pred_sft_coef: float = 0.0
++    # CToM: SCHEDULE for pred_sft_coef, as fractions of total training steps so a
++    # schedule survives a change of dataset size (expert-only halves the step count).
++    #   [0, warmup_frac)          linear ramp 0 -> pred_sft_coef
++    #   [warmup_frac, decay_start_frac)  hold at pred_sft_coef
++    #   [decay_start_frac, 1]     linear decay pred_sft_coef -> pred_sft_coef_final
++    # Measured motivation (run 893455): grad_norm starts 27x the aux-off control and
++    # pred_sft_loss falls 2.19 -> 0.92 within ~30 steps, so the term is most expensive
++    # exactly at init; and 90% of the R_pred gain is banked by ~55% of training, after
++    # which the term keeps costing ~3.7x gradient for the last ~10%.
++    # pred_sft_coef_final < 0 disables the schedule entirely (constant pred_sft_coef),
++    # which is the default and reproduces every run to date.
++    pred_sft_coef_final: float = -1.0
++    pred_sft_coef_warmup_frac: float = 0.0
++    pred_sft_coef_decay_start_frac: float = 1.0
++    # CToM: split the joint actor update's gradient into its two terms and log
++    # them. The PPO gradient is parked and cleared between the two backwards, the
++    # auxiliary gradient is measured alone, then the two are summed back before
++    # optimizer_step -- so the step itself is unchanged. Needed because the two
++    # loss VALUES are not comparable (a PPO surrogate against a token-mean NLL);
++    # only the gradient norms say which term moves the policy. See run 893455,
++    # where aux-on raised grad_norm 27x over the aux-off control.
++    pred_sft_grad_diag: bool = True
++    # CToM: ceiling on ||g_aux|| as a multiple of ||g_pg||, enforced by rescaling the
++    # auxiliary gradient in place before the two terms are summed. 0 = uncapped.
++    # Implies pred_sft_grad_diag (the cap is computed from the two measured norms).
++    pred_sft_grad_ratio_cap: float = 0.5
++    # CToM: drop supervision slots whose target is only the user simulator's
++    # termination signal. Measured on 893455/891422 expert rows, ~30% of prediction
++    # targets ARE just "[[TERMINATE CHAT]]" (novice: 0%), so on expert-only data a
++    # third of the aux-loss budget would teach a fixed string. Those turns score
++    # F1 0.04 at eval, i.e. they buy nothing.
++    pred_sft_skip_terminate: bool = True
++    # CToM sft_v3: independently bounded controller-owned generation phases.
++    pred_answer_max_tokens: int = 768
++    pred_prediction_max_tokens: int = 192
++    # CToM sft_v4: the third phase. The turn is draft -> prediction -> revision,
++    # and this bounds the revision, which is the only part the user sees.
++    # pred_answer_max_tokens bounds the draft in that mode.
++    pred_revision_max_tokens: int = 768
++    # CToM sft_v6 (BDR): draft / belief / ask phase caps, the per-round cap on
++    # internal REVISE turns, and how many counterfactual self-revision samples
++    # the VOI gate draws per replied turn. bdr_draft_max_tokens=0 falls back to
++    # pred_answer_max_tokens. See the retired BDR predecessor.9.
++    bdr_draft_max_tokens: int = 0
++    bdr_belief_max_tokens: int = 256
++    bdr_ask_max_tokens: int = 512
++    bdr_max_internal_revisions: int = 1
++    bdr_cf_samples: int = 2
++    # CToM sft_v7 (the paper's method section): think-phase cap, ask cap, the
++    # per-round cap on prediction-gated inner revisions, and how the verdict is
++    # obtained ("parse" = calibrated markers on the prediction text). The draft
++    # reuses bdr_draft_max_tokens (0 -> pred_answer_max_tokens) and the
++    # prediction reuses pred_prediction_max_tokens.
++    v7_think_max_tokens: int = 256
++    v7_ask_max_tokens: int = 512
++    v7_max_inner_revisions: int = 3
++    v7_verdict_mode: str = "parse"
++    v7_action_protocol: str = "legacy"
++    # Episode mean of legal-action entropy, independently normalized from PPO tokens.
++    decision_entropy_coef: float = 0.0
++    # CToM sft_v3: put the prediction phase INTO the PPO loss (response_mask=1)
++    # instead of masking it out. Default False preserves every sft_v3 run to date.
++    # With no aux loss and no NLL reward, True is the pure end-to-end test: the
++    # prediction is shaped only by the task reward reaching it through the
++    # assistant's own later turns, since the prediction tokens stay in the
++    # context the next turn is generated from.
++    pred_in_ppo: bool = False
++    # Detached prediction CE is credited to answer GRPO; differentiable CE is
++    # still weighted independently by pred_sft_coef in the joint actor loss.
++    pred_nll_reward_coef: float = 0.0
++    pred_nll_reward_transform: str = "neg_nll"
++    pred_nll_max: float = 20.0
+     ppo_epochs: int = 1
+     shuffle: bool = False
+     data_loader_seed: int = 1
+@@ -193,6 +269,12 @@ class ActorConfig(BaseConfig):
+ 
+     def __post_init__(self):
+         """Validate actor configuration parameters."""
++        if self.v7_action_protocol not in ("legacy", "categorical_v1"):
++            raise ValueError("v7_action_protocol must be legacy or categorical_v1")
++        if not 0 <= self.decision_entropy_coef < float("inf"):
++            raise ValueError("decision_entropy_coef must be finite and nonnegative")
++        if self.decision_entropy_coef and self.v7_action_protocol != "categorical_v1":
++            raise ValueError("decision entropy requires v7_action_protocol=categorical_v1")
+         assert self.strategy != MISSING
+         assert self.rollout_n != MISSING
+         if not self.use_dynamic_bsz:
+diff --git a/verl/workers/engine/base.py b/verl/workers/engine/base.py
+index fedfc732..6420cbfe 100644
+--- a/verl/workers/engine/base.py
++++ b/verl/workers/engine/base.py
+@@ -15,6 +15,7 @@
+ The abstract base class defining the interface for model training engines.
+ """
+ 
++import math
+ from abc import abstractmethod
+ from contextlib import nullcontext
+ from typing import Any, Callable, ContextManager, Generator, Optional
+@@ -86,6 +87,113 @@ class BaseEngine:
+         """
+         raise NotImplementedError
+ 
++    # ------------------------------------------------------------------
++    # CToM: per-term gradient diagnostics for the joint PPO + aux-SFT step
++    # ------------------------------------------------------------------
++    def grad_global_norm(self) -> Optional[float]:
++        """L2 norm of the gradients currently sitting on the parameters, WITHOUT
++        clipping and WITHOUT stepping.
++
++        Implementations must use the same (sharded / all-reduced) reduction that
++        ``optimizer_step`` uses for its returned ``grad_norm``, so norms taken at
++        different points inside one step are directly comparable and the
++        parallelogram identity below holds. Engines that cannot provide it
++        return ``None``; callers then skip the breakdown silently.
++        """
++        return None
++
++    def _grad_bearing_params(self) -> list[torch.nn.Parameter]:
++        module = getattr(self, "module", None)
++        if module is None:
++            return []
++        return [p for p in module.parameters() if p.grad is not None]
++
++    def _park_grads(self) -> list[tuple[torch.nn.Parameter, torch.Tensor]]:
++        """Detach-clone the current gradients and clear ``.grad``, so that a
++        second backward can be measured on its own before the two are summed.
++
++        Clearing to ``None`` (rather than zeroing in place) is exactly the state
++        FSDP sees between two training steps -- ``prepare_gradient_for_backward``
++        skips its accumulate branch and ``_saved_grad_shard`` has already been
++        deleted by the previous backward's finalize -- so the second backward
++        starts from scratch instead of accumulating.
++
++        Only LoRA/trainable parameters carry grads, so the clone is small.
++        """
++        parked = [(p, p.grad.detach().clone()) for p in self._grad_bearing_params()]
++        for p, _ in parked:
++            p.grad = None
++        return parked
++
++    def _unpark_grads(self, parked: list[tuple[torch.nn.Parameter, torch.Tensor]]) -> None:
++        """Sum a snapshot taken by :meth:`_park_grads` back onto ``.grad``, so the
++        optimizer sees exactly the gradient it would have seen without the probe."""
++        for p, g in parked:
++            if p.grad is None:
++                p.grad = g
++            else:
++                p.grad.add_(g.to(dtype=p.grad.dtype, device=p.grad.device))
++
++    def _scale_grads(self, scale: float) -> None:
++        """Multiply every gradient currently on the parameters by ``scale``.
++
++        Called while only ONE term's gradient is present (between
++        :meth:`_park_grads` and :meth:`_unpark_grads`), so it rescales that term
++        alone. In-place, no allocation, no collective.
++        """
++        for p in self._grad_bearing_params():
++            p.grad.mul_(scale)
++
++    @staticmethod
++    def _aux_cap_scale(pg_norm: Optional[float], aux_norm: Optional[float], ratio_cap: float) -> float:
++        """Multiplier that forces ``||g_aux|| <= ratio_cap * ||g_pg||``.
++
++        Returns 1.0 (no rescale) when the cap is off, when either norm is missing
++        or non-finite, or when the aux gradient is already under the ceiling.
++        A zero policy-gradient norm gives a zero ceiling: suppress the auxiliary
++        gradient too, rather than allowing an unbounded auxiliary-only update.
++        """
++        if not ratio_cap or ratio_cap <= 0:
++            return 1.0
++        if pg_norm is None or aux_norm is None:
++            return 1.0
++        if not (math.isfinite(pg_norm) and math.isfinite(aux_norm)):
++            return 1.0
++        allowed = ratio_cap * pg_norm
++        if aux_norm <= allowed:
++            return 1.0
++        return allowed / aux_norm
++
++    @staticmethod
++    def _grad_breakdown_metrics(
++        pg_norm: Optional[float], aux_norm: Optional[float], total_norm: Optional[float], aux_coef: float
++    ) -> dict[str, float]:
++        """Turn the three measured norms into the loggable breakdown.
++
++        ``aux_norm`` is the norm of ``grad(aux_coef * L_sft)`` -- the gradient as
++        actually applied. The cosine between the two terms comes for free from
++        the parallelogram identity, no extra reduction needed::
++
++            ||g_pg + g_aux||^2 = ||g_pg||^2 + ||g_aux||^2 + 2 <g_pg, g_aux>
++        """
++        metrics: dict[str, float] = {}
++        if pg_norm is None or aux_norm is None:
++            return metrics
++        metrics["actor/grad_norm_pg"] = pg_norm
++        metrics["actor/grad_norm_aux"] = aux_norm
++        metrics["actor/grad_norm_aux_unscaled"] = (aux_norm / aux_coef) if aux_coef else 0.0
++        denom = pg_norm + aux_norm
++        # what fraction of the raw gradient magnitude the aux term contributes
++        metrics["actor/grad_norm_aux_share"] = (aux_norm / denom) if denom > 0 else 0.0
++        if pg_norm > 0:
++            metrics["actor/grad_norm_aux_over_pg"] = aux_norm / pg_norm
++        if total_norm is not None and math.isfinite(total_norm) and pg_norm > 0 and aux_norm > 0:
++            dot = (total_norm**2 - pg_norm**2 - aux_norm**2) / 2.0
++            cos = dot / (pg_norm * aux_norm)
++            # tiny float error can push |cos| just past 1
++            metrics["actor/grad_cos_aux_pg"] = max(-1.0, min(1.0, cos))
++        return metrics
++
+     def lr_scheduler_step(self):
+         """
+         Advance the learning rate scheduler by one step.
+@@ -130,6 +238,123 @@ class BaseEngine:
+             outputs["metrics"]["grad_norm"] = grad_norm
+         return outputs
+ 
++    def train_batch_joint(
++        self,
++        data: TensorDict,
++        loss_function: Callable,
++        aux_data: TensorDict,
++        aux_loss_function: Callable,
++        aux_coef: float,
++        grad_diagnostics: bool = False,
++        grad_ratio_cap: float = 0.0,
++    ) -> Any:
++        """Run a joint optimizer step: the primary (PPO) loss plus an auxiliary
++        loss on a *separate* batch, both backpropagated into the SAME step.
++
++        Gradients from the two forward/backward passes accumulate before a single
++        ``optimizer_step``. ``aux_loss_function`` is scaled by ``aux_coef``.
++
++        Used by CToM's prediction mode: the auxiliary loss is a
++        teacher-forced "predict-the-next-user-turn" cross-entropy whose sequences
++        differ from the PPO response (different tokens), hence a second pass.
++
++        With ``grad_diagnostics=True`` the two terms' gradients are measured
++        SEPARATELY -- the PPO gradient is parked and cleared between the two
++        backwards -- so the update logs ``||g_pg||``, ``||g_aux||`` and their
++        cosine alongside the usual combined ``grad_norm``. That is the only way
++        to see which term is actually driving the policy: the loss values are
++        not comparable (a PPO surrogate against a token NLL) but the gradient
++        norms are. Costs two extra grad-norm all-reduces plus one clone of the
++        trainable grads per mini-batch.
++
++        ``grad_ratio_cap`` > 0 additionally CONSTRAINS the auxiliary term: after
++        it is measured alone it is rescaled in place so that
++        ``||g_aux|| <= grad_ratio_cap * ||g_pg||`` before the two are summed.
++        This makes the SFT term a bounded perturbation on the policy gradient
++        instead of the dominant direction, and — unlike a small fixed
++        ``aux_coef`` — holds that bound as the SFT loss decays over training.
++        It requires ``grad_diagnostics=True`` (both norms must be known).
++        """
++        maybe_fix_3d_position_ids(data)
++        maybe_fix_3d_position_ids(aux_data)
++
++        self.optimizer_zero_grad()
++
++        # 1) primary PPO loss -> accumulates grads
++        outputs = self.forward_backward_batch(data, loss_function, forward_only=False)
++
++        # 1b) measure the PPO gradient ALONE, then park it so the auxiliary
++        # gradient can be measured alone too. Re-summed before optimizer_step, so
++        # the parameter update is bit-for-bit the same as without the probe.
++        pg_grad_norm = None
++        parked_grads = None
++        if grad_diagnostics:
++            pg_grad_norm = self.grad_global_norm()
++            if pg_grad_norm is not None:
++                parked_grads = self._park_grads()
++
++        # 2) auxiliary (scaled) SFT loss on the separate batch -> accumulates grads
++        def _scaled_aux(model_output, data, dp_group=None):
++            loss, metrics = aux_loss_function(model_output=model_output, data=data, dp_group=dp_group)
++            scaled = loss * aux_coef
++            # Defensive: a mini-batch with no SFT target tokens (e.g. all
++            # placeholder rows) makes the token-mean denominator zero -> nan/inf.
++            # We must NOT replace it with a detached zero (loss.new_zeros) — that
++            # has no grad_fn and crashes loss.backward() with "element 0 ... does
++            # not require grad". Instead tie a ZERO to the autograd graph through
++            # the model output so backward is valid and contributes no gradient.
++            if not torch.isfinite(scaled):
++                lp = model_output["log_probs"]
++                vals = lp.values() if lp.is_nested else lp
++                scaled = vals.sum() * 0.0
++            return scaled, metrics
++
++        aux_outputs = self.forward_backward_batch(aux_data, _scaled_aux, forward_only=False)
++
++        # 2b) measure the auxiliary gradient alone, optionally cap it against the
++        # PPO gradient, then put the PPO gradient back so the optimizer steps on
++        # the true sum.
++        aux_grad_norm = None
++        aux_grad_norm_precap = None
++        cap_scale = 1.0
++        if parked_grads is not None:
++            aux_grad_norm = self.grad_global_norm()
++            aux_grad_norm_precap = aux_grad_norm
++            cap_scale = self._aux_cap_scale(pg_grad_norm, aux_grad_norm, grad_ratio_cap)
++            if cap_scale != 1.0:
++                # only the aux gradient is on the params right now
++                self._scale_grads(cap_scale)
++                aux_grad_norm = aux_grad_norm * cap_scale
++            self._unpark_grads(parked_grads)
++            parked_grads = None
++
++        grad_norm = self.optimizer_step()
++
++        if self.is_mp_src_rank_with_outputs():
++            assert "grad_norm" not in outputs["metrics"]
++            outputs["metrics"]["grad_norm"] = grad_norm
++            aux_losses = aux_outputs["loss"] if aux_outputs and "loss" in aux_outputs else []
++            scaled = float(sum(aux_losses)) if aux_losses else 0.0
++            outputs["metrics"]["actor/pred_sft_loss_scaled"] = scaled
++            outputs["metrics"]["actor/pred_sft_loss"] = (scaled / aux_coef) if aux_coef else 0.0
++            # the weight the worker ACTUALLY applied this step -- actor/pred_sft_coef
++            # is logged by the trainer from its own schedule and only plots intent.
++            outputs["metrics"]["actor/pred_sft_coef_applied"] = float(aux_coef)
++            # with the cap active the gradient that reaches the optimizer is
++            # grad(aux_coef * cap_scale * L_sft), so THAT is the weight the
++            # policy actually felt.
++            outputs["metrics"]["actor/pred_sft_coef_effective"] = float(aux_coef) * cap_scale
++            if aux_grad_norm_precap is not None:
++                outputs["metrics"]["actor/grad_norm_aux_precap"] = aux_grad_norm_precap
++                outputs["metrics"]["actor/grad_aux_cap_scale"] = cap_scale
++                outputs["metrics"]["actor/grad_aux_capped"] = 1.0 if cap_scale != 1.0 else 0.0
++            outputs["metrics"].update(
++                self._grad_breakdown_metrics(
++                    pg_grad_norm, aux_grad_norm, grad_norm, float(aux_coef) * cap_scale
++                )
++            )
++        return outputs
++
+     def infer_batch(self, data: TensorDict, loss_function: Optional[Callable] = None) -> Any:
+         """
+         Perform inference on a batch of data.
+diff --git a/verl/workers/engine/fsdp/transformer_impl.py b/verl/workers/engine/fsdp/transformer_impl.py
+index f8506206..31b9a351 100644
+--- a/verl/workers/engine/fsdp/transformer_impl.py
++++ b/verl/workers/engine/fsdp/transformer_impl.py
+@@ -629,6 +629,33 @@ class FSDPEngine(BaseEngine):
+         """
+         self.optimizer.zero_grad()
+ 
++    def grad_global_norm(self) -> float:
++        """L2 norm of the gradients currently accumulated, with no clipping.
++
++        Same reduction path as :meth:`optimizer_step` -- an infinite ``max_norm``
++        makes the clip coefficient >= 1, which every backend below clamps to
++        exactly 1.0, so the gradients are left untouched. Used by
++        ``train_batch_joint`` to attribute the update to the PPO vs auxiliary
++        term.
++
++        Caveat: if the gradients are already non-finite, ``inf / inf`` makes the
++        clip coefficient nan and the in-place multiply poisons them. That step
++        was going to be skipped by ``optimizer_step`` either way (it refuses a
++        non-finite grad_norm), so the outcome is unchanged -- but a non-finite
++        return here means "this step is dead", not "this term is large".
++        """
++        max_norm = float("inf")
++        if isinstance(self.module, FSDP):
++            grad_norm = self.module.clip_grad_norm_(max_norm)
++        elif isinstance(self.module, FSDPModule):
++            grad_norm = fsdp2_clip_grad_norm_(self.module.parameters(), max_norm=max_norm)
++        else:
++            grad_norm = torch.nn.utils.clip_grad_norm_(self.module.parameters(), max_norm=max_norm)
++
++        if isinstance(grad_norm, DTensor):
++            grad_norm = grad_norm.full_tensor()
++        return float(grad_norm.item())
++
+     def optimizer_step(self):
+         """
+         Clip gradients, skip update if non-finite, and step optimizer.
+@@ -894,6 +921,16 @@ class FSDPEngineWithLMHead(FSDPEngine):
+ 
+         # args used to get outputs
+         output_args = {}
++        if "action_token_ids_shifted" in micro_batch:
++            if not use_remove_padding or use_fused_kernels:
++                raise ValueError("categorical_v1 requires FSDP remove-padding with unfused logits")
++            action_ids = micro_batch["action_token_ids_shifted"].values().T.contiguous()
++            if self.use_ulysses_sp:
++                action_ids, _, _ = ulysses_pad_and_slice_inputs(
++                    action_ids, position_ids_rmpad=None,
++                    sp_size=self.ulysses_sequence_parallel_size, pad_value=-1,
++                )
++            output_args["action_token_ids_shifted"] = action_ids.T
+ 
+         if use_remove_padding:
+             # support per sample temperature
+@@ -1035,13 +1072,26 @@ class FSDPEngineWithLMHead(FSDPEngine):
+ 
+                 # if use_sp: ((total_nnz / sp) + pad) ; if not use_sp: (batch, seqlen)
+                 inplace_backward = True
+-                if calculate_entropy:
++                if calculate_entropy or "action_token_ids_shifted" in output_args:
+                     inplace_backward = False
+                 log_probs = logprobs_from_logits(
+                     logits=logits_rmpad,
+                     labels=input_ids_rmpad_rolled,
+                     inplace_backward=inplace_backward,
+                 )
++                if "action_token_ids_shifted" in output_args:
++                    from verl.workers.utils.categorical_actions import categorical_outputs
++
++                    log_probs, action_outputs = categorical_outputs(
++                        logits_rmpad, input_ids_rmpad_rolled,
++                        output_args["action_token_ids_shifted"], log_probs,
++                    )
++                    for key, value in action_outputs.items():
++                        if self.use_ulysses_sp:
++                            value = gather_outputs_and_unpad(
++                                value, gather_dim=0, unpad_dim=0, padding_size=output_args["pad_size"]
++                            )
++                        model_output[key] = torch.nested.nested_tensor_from_jagged(value, input_ids.offsets())
+ 
+                 # compute entropy
+                 if calculate_entropy:
+diff --git a/verl/workers/engine_workers.py b/verl/workers/engine_workers.py
+index 74ecb711..3bb31f20 100644
+--- a/verl/workers/engine_workers.py
++++ b/verl/workers/engine_workers.py
+@@ -51,7 +51,8 @@ from verl.workers.config import (
+     TrainingWorkerConfig,
+ )
+ from verl.workers.rollout.base import BaseRollout, get_rollout_class
+-from verl.workers.utils.losses import diffusion_loss, ppo_loss
++from verl.workers.utils.losses import diffusion_loss, ppo_loss, sft_loss
++from verl.utils.dataset.dataset_utils import DatasetPadMode
+ 
+ logger = logging.getLogger(__file__)
+ logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
+@@ -72,6 +73,29 @@ def _with_routing_replay_flag(enabled: bool):
+     return decorator
+ 
+ 
++# CToM: plain-float scalars the joint PPO + aux-SFT step adds to the metrics dict.
++# They are already globally reduced, so _postprocess_output must pop them BEFORE the
++# dp allgather (exactly like grad_norm) -- otherwise allgather turns each into a
++# list-of-floats and the list-of-Metric aggregation in train_mini_batch crashes.
++# Anything train_batch_joint emits as a bare float MUST be listed here;
++# tests/test_categorical_actions.py asserts emitted subset of this tuple.
++JOINT_SCALAR_METRICS = (
++    "actor/pred_sft_loss",
++    "actor/pred_sft_loss_scaled",
++    "actor/pred_sft_coef_applied",
++    "actor/grad_norm_pg",
++    "actor/grad_norm_aux",
++    "actor/grad_norm_aux_unscaled",
++    "actor/grad_norm_aux_share",
++    "actor/grad_norm_aux_over_pg",
++    "actor/grad_cos_aux_pg",
++    "actor/pred_sft_coef_effective",
++    "actor/grad_norm_aux_precap",
++    "actor/grad_aux_cap_scale",
++    "actor/grad_aux_capped",
++)
++
++
+ class TrainingWorker(Worker, DistProfilerExtension):
+     """
+     TrainingWorker provides a Tinker-like API (https://thinkingmachines.ai/tinker/) as a RayWorkerGroup
+@@ -151,6 +175,87 @@ class TrainingWorker(Worker, DistProfilerExtension):
+             self.flops_counter = None
+ 
+         self.loss_fn = None
++        # CToM: auxiliary "predict-next-user-turn" SFT loss (sft prediction mode)
++        self.aux_loss_fn = None
++        self.aux_coef = 0.0
++        # CToM: measure the PPO and auxiliary gradients separately inside the
++        # joint step so the update logs which term is driving the policy.
++        self.aux_grad_diag = False
++        # CToM: ceiling on ||g_aux|| as a multiple of ||g_pg|| (0 = uncapped).
++        self.aux_grad_ratio_cap = 0.0
++
++    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
++    def set_aux_loss_fn(self, aux_loss_fn, aux_coef, grad_diag=False, grad_ratio_cap=0.0):
++        """Register the auxiliary (SFT) loss + its weight for joint actor updates."""
++        self.aux_loss_fn = aux_loss_fn
++        self.aux_coef = float(aux_coef)
++        self.aux_grad_ratio_cap = float(grad_ratio_cap or 0.0)
++        # the cap is computed from the two measured norms, so it cannot run
++        # without the diagnostics probe.
++        self.aux_grad_diag = bool(grad_diag) or self.aux_grad_ratio_cap > 0
++
++    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
++    def set_aux_coef(self, aux_coef):
++        """Update ONLY the auxiliary loss weight, mid-run.
++
++        CToM: the pred_sft coefficient is scheduled (warmup -> hold -> decay), so
++        the trainer pushes a new value each step. Kept separate from
++        set_aux_loss_fn because the loss fn is a partial that need not be
++        re-serialized on every step.
++        """
++        self.aux_coef = float(aux_coef)
++
++    def _build_sft_td(self, data: TensorDict) -> TensorDict:
++        """Pop the auxiliary SFT columns off the PPO batch and assemble a
++        standalone NO_PADDING TensorDict the engine forward can consume.
++
++        When a `sft_seq_lens` column is present (sft_v2 mode), each PPO row
++        packs SEVERAL per-turn sequences flat-concatenated (to preserve the 1:1
++        row alignment through mini-batching / DP dispatch); unpack them here
++        into one aux row per sequence before the forward."""
++        input_ids = data.pop("sft_input_ids")
++        position_ids = data.pop("sft_position_ids")
++        loss_mask = data.pop("sft_loss_mask")
++        seq_lens = data.pop("sft_seq_lens") if "sft_seq_lens" in data.keys() else None
++        if seq_lens is not None:
++            ii_rows, pi_rows, lm_rows = [], [], []
++            for row_ii, row_pi, row_lm, row_sl in zip(
++                input_ids.unbind(), position_ids.unbind(), loss_mask.unbind(), seq_lens.unbind()
++            ):
++                off = 0
++                for L in row_sl.tolist():
++                    L = int(L)
++                    ii_rows.append(row_ii[off : off + L])
++                    pi_rows.append(row_pi[off : off + L])
++                    lm_rows.append(row_lm[off : off + L])
++                    off += L
++            input_ids = torch.nested.as_nested_tensor(ii_rows, layout=torch.jagged)
++            position_ids = torch.nested.as_nested_tensor(pi_rows, layout=torch.jagged)
++            loss_mask = torch.nested.as_nested_tensor(lm_rows, layout=torch.jagged)
++        bsz = input_ids.size(0)
++        if tu.get_non_tensor_data(data, "sft_target_mean", False):
++            # Each valid DRAFT prediction contributes one token-mean NLL.
++            # The engine all-reduces the mask sum (= valid targets), so this
++            # remains a global target mean across microbatches and DP ranks.
++            loss_mask = torch.nested.as_nested_tensor(
++                [row.float() / row.sum().clamp_min(1) for row in loss_mask.unbind()],
++                layout=torch.jagged,
++            )
++        sft_td = TensorDict(
++            {"input_ids": input_ids, "position_ids": position_ids, "loss_mask": loss_mask},
++            batch_size=[bsz],
++        )
++        tu.assign_non_tensor(
++            sft_td,
++            temperature=1.0,
++            pad_mode=DatasetPadMode.NO_PADDING,
++            use_remove_padding=self.model_config.get("use_remove_padding", False),
++            use_dynamic_bsz=self.engine_config.use_dynamic_bsz,
++            max_token_len_per_gpu=self.engine_config.max_token_len_per_gpu,
++            micro_batch_size_per_gpu=self.engine_config.micro_batch_size_per_gpu,
++            use_fused_kernels=self.engine_config.use_fused_kernels,
++        )
++        return sft_td
+ 
+     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+     def to(self, device, model=True, optimizer=True, grad=True):
+@@ -201,6 +306,11 @@ class TrainingWorker(Worker, DistProfilerExtension):
+         # For grad_norm, we do not perform all reduce because it is already been done when clipping grad
+         grad_norm = metrics.pop("grad_norm", None)
+         lr = metrics.pop("lr", None)
++        # CToM: auxiliary SFT-loss scalars are added as plain floats by
++        # train_batch_joint. Pop them BEFORE allgather (like grad_norm) so they
++        # stay scalars; otherwise allgather turns them into lists-of-floats that
++        # crash the list-of-Metric aggregation in train_mini_batch.
++        pred_sft_scalars = {k: metrics.pop(k) for k in JOINT_SCALAR_METRICS if k in metrics}
+ 
+         # For other metrics, we perform all gather in dp group (only if DP > 1)
+         if dp_group is not None:
+@@ -212,6 +322,7 @@ class TrainingWorker(Worker, DistProfilerExtension):
+             final_metrics["grad_norm"] = grad_norm
+         if lr is not None:
+             final_metrics["lr"] = lr
++        final_metrics.update(pred_sft_scalars)
+ 
+         # TODO: confirm the mtp loss IS same across dp
+         for k, v in final_metrics.items():
+@@ -349,7 +460,43 @@ class TrainingWorker(Worker, DistProfilerExtension):
+             self.engine.train_mode(disable_auto_offload=disable_auto_offload),
+             Timer(name="train_batch", logger=None) as timer,
+         ):
+-            output = self.engine.train_batch(data, loss_function=self.loss_fn)
++            has_sft_cols = "sft_input_ids" in data.keys()
++            use_joint = has_sft_cols and self.aux_loss_fn is not None and self.aux_coef > 0
++            if use_joint:
++                sft_td = self._build_sft_td(data)
++                output = self.engine.train_batch_joint(
++                    data,
++                    self.loss_fn,
++                    sft_td,
++                    self.aux_loss_fn,
++                    self.aux_coef,
++                    grad_diagnostics=self.aux_grad_diag,
++                    grad_ratio_cap=self.aux_grad_ratio_cap,
++                )
++            else:
++                # Drop any auxiliary columns so the PPO forward sees a clean batch.
++                if has_sft_cols:
++                    for k in ("sft_input_ids", "sft_position_ids", "sft_loss_mask", "sft_seq_lens"):
++                        if k in data.keys():
++                            data.pop(k)
++                output = self.engine.train_batch(data, loss_function=self.loss_fn)
++                # CToM: with the aux term off (coef 0, or a schedule passing through
++                # 0) there is no second term, so the whole gradient IS the PPO
++                # gradient. Emit it under the joint path's keys so an aux-on/off pair
++                # plots on one axis instead of leaving a hole.
++                if (
++                    self.aux_loss_fn is not None
++                    and self.aux_grad_diag
++                    and self.engine.is_mp_src_rank_with_outputs()
++                ):
++                    joint_metrics = output["metrics"]
++                    joint_metrics["actor/grad_norm_pg"] = joint_metrics["grad_norm"]
++                    joint_metrics["actor/grad_norm_aux"] = 0.0
++                    joint_metrics["actor/grad_norm_aux_share"] = 0.0
++                    joint_metrics["actor/pred_sft_coef_applied"] = float(self.aux_coef)
++                    joint_metrics["actor/pred_sft_coef_effective"] = 0.0
++                    joint_metrics["actor/grad_aux_cap_scale"] = 1.0
++                    joint_metrics["actor/grad_aux_capped"] = 0.0
+             # containing loss, model_output and metrics
+             # for training, we only care about loss and metrics
+         delta_time = timer.last
+@@ -485,6 +632,21 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
+     def set_loss_fn(self, loss_fn):
+         self.actor.set_loss_fn(loss_fn=loss_fn)
+ 
++    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
++    def set_aux_coef(self, aux_coef):
++        """CToM: passthrough for the scheduled pred_sft aux coefficient.
++
++        The weight that actually multiplies the aux loss is TrainingWorker.aux_coef
++        (read at engine_workers.py train_mini_batch -> train_batch_joint). The
++        trainer schedules it per step and pushes it through the worker group, which
++        wraps THIS class — so without this hop the call raises AttributeError, the
++        push is lost, and the worker keeps the static config value bound at setup.
++        That is exactly what happened to run 904892: actor/pred_sft_coef logged a
++        clean 0 -> 0.1 -> 0.01 curve while the applied weight sat at a flat 0.1.
++        """
++        assert "actor" in self.role, "set_aux_coef only supported for the actor role"
++        self.actor.set_aux_coef(aux_coef)
++
+     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+     def to(self, device, model=True, optimizer=True, grad=True):
+         """Manual control of load/offload"""
+@@ -581,6 +743,16 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
+             self.actor = TrainingWorker(config=actor_training_config)
+             self.actor.reset()
+             self.actor.set_loss_fn(self.loss_fn)
++            # CToM: register the auxiliary predict-next-user-turn SFT loss so the
++            # actor update runs a joint PPO + lambda*SFT step (sft prediction mode).
++            pred_sft_coef = float(getattr(actor_config, "pred_sft_coef", 0.0) or 0.0)
++            if pred_sft_coef > 0:
++                self.actor.set_aux_loss_fn(
++                    partial(sft_loss, config=actor_config),
++                    pred_sft_coef,
++                    grad_diag=bool(getattr(actor_config, "pred_sft_grad_diag", False)),
++                    grad_ratio_cap=float(getattr(actor_config, "pred_sft_grad_ratio_cap", 0.0) or 0.0),
++                )
+             self.set_dispatch_collect(mesh_name="actor", **self.actor.get_dispatch_collect())
+ 
+         # 3. build rollout engine
+diff --git a/verl/workers/utils/losses.py b/verl/workers/utils/losses.py
+index 02fb2d0f..3c7fb89b 100644
+--- a/verl/workers/utils/losses.py
++++ b/verl/workers/utils/losses.py
+@@ -47,7 +47,7 @@ def sft_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
+         # NOTE: loss is averaged over all tokens in the batch across all data parallel groups,
+         # For FSDP backend, the loss is directly used for backward; while for Megatron backend,
+         # the loss should be scaled by `num_microbatches` for pp schedule.
+-        loss = -masked_sum(log_prob_flatten, loss_mask_flatten) / batch_num_tokens * dp_size
++        loss = -masked_sum(log_prob_flatten, loss_mask_flatten) / max(batch_num_tokens, 1) * dp_size
+     else:
+         response_mask = data["response_mask"].to(bool)
+         loss = -masked_sum(log_prob, response_mask) / batch_num_tokens * dp_size
+@@ -83,6 +83,35 @@ def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
+ 
+     metrics = {}
+ 
++    action_entropy_loss = None
++    if config.get("v7_action_protocol", "legacy") == "categorical_v1":
++        from verl.workers.utils.categorical_actions import episode_action_mean
++
++        if "action_token_ids" not in data or "action_entropy" not in model_output:
++            raise ValueError("categorical_v1 requires action metadata and categorical model outputs")
++        action_mask = (data["action_token_ids"] >= 0).any(-1) & data["response_mask"].bool()
++        # Global size is fixed before microbatching. Never normalize by tokens.
++        global_size = config.global_batch_info["global_batch_size"]
++        if not global_size:
++            raise ValueError("Decision entropy requires the global PPO minibatch size")
++        for key in ("action_entropy", "action_p_ask", "action_p_draft", "action_p_commit"):
++            value = no_padding_2_padding(model_output[key], data)
++            mean = episode_action_mean(value, action_mask, global_batch_size=global_size, dp_size=data["dp_size"])
++            metrics[f"actor/{key}"] = Metric(value=mean.detach(), aggregation=AggregationType.SUM)
++            if key == "action_entropy":
++                action_entropy_loss = mean
++        # Stage-specific numerators AND denominators; their ratios are conditional
++        # means, even when DP ranks/microbatches contain different action counts.
++        for stage, mask in (("pre_draft", action_mask & (data["action_token_ids"][..., 2] < 0)),
++                            ("post_draft", action_mask & (data["action_token_ids"][..., 2] >= 0))):
++            scale = data["dp_size"] / global_size
++            metrics[f"actor/{stage}_decisions_per_episode"] = Metric(value=mask.sum() * scale, aggregation=AggregationType.SUM)
++            for key in ("action_entropy", "action_p_ask"):
++                value = no_padding_2_padding(model_output[key], data)
++                metrics[f"actor/{stage}_{key}_sum_per_episode"] = Metric(
++                    value=(value.detach() * mask).sum() * scale, aggregation=AggregationType.SUM
++                )
++
+     # select fields and convert to padded tensor
+     fields = ["response_mask", "old_log_probs", "advantages"]
+     if "rollout_is_weights" in data:
+@@ -119,6 +148,31 @@ def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
+     metrics.update(pg_metrics)
+     metrics["actor/pg_loss"] = Metric(value=pg_loss, aggregation=metric_aggregation)
+     policy_loss = pg_loss
++    if action_entropy_loss is not None:
++        policy_loss = policy_loss - config.decision_entropy_coef * action_entropy_loss
++        metrics["actor/decision_entropy_bonus"] = Metric(
++            value=(config.decision_entropy_coef * action_entropy_loss).detach(), aggregation=AggregationType.SUM
++        )
++
++    # CToM: advantage diagnostics for THIS policy update -- the companion of the
++    # actor/grad_norm_pg breakdown emitted by train_batch_joint. The PPO term's
++    # gradient scale is set by the advantages, so:
++    #   adv_abs_mean  how large the policy-gradient signal actually is
++    #   adv_std       its spread (GRPO normalizes per group, so ~1 when healthy)
++    #   adv_zero_frac share of response tokens carrying NO signal -- under GRPO a
++    #                 prompt group whose rollouts all scored the same gets
++    #                 advantage exactly 0, which is the degenerate-group rate.
++    if response_mask.any():
++        with torch.no_grad():
++            adv_abs = advantages.abs()
++            adv_mean = masked_mean(advantages, response_mask)
++            adv_abs_mean = masked_mean(adv_abs, response_mask)
++            adv_var = masked_mean((advantages - adv_mean) ** 2, response_mask)
++            adv_zero_frac = masked_mean((adv_abs <= 1e-8).to(advantages.dtype), response_mask)
++        metrics["actor/adv_mean"] = Metric(value=adv_mean, aggregation=AggregationType.MEAN)
++        metrics["actor/adv_abs_mean"] = Metric(value=adv_abs_mean, aggregation=AggregationType.MEAN)
++        metrics["actor/adv_std"] = Metric(value=adv_var.clamp_min(0).sqrt(), aggregation=AggregationType.MEAN)
++        metrics["actor/adv_zero_frac"] = Metric(value=adv_zero_frac, aggregation=AggregationType.MEAN)
+ 
+     # add entropy loss
+     if entropy is not None:
+diff --git a/verl/workers/utils/padding.py b/verl/workers/utils/padding.py
+index 73ad94fe..5430abf1 100644
+--- a/verl/workers/utils/padding.py
++++ b/verl/workers/utils/padding.py
+@@ -69,6 +69,10 @@ def left_right_2_no_padding(data: TensorDict) -> TensorDict:
+     data["input_ids"] = input_ids_nested
+     data["position_ids"] = position_ids_nested
+     data["loss_mask"] = data["response_mask"]
++    if "action_token_ids" in data:
++        from verl.workers.utils.categorical_actions import shifted_action_ids
++
++        data["action_token_ids_shifted"] = shifted_action_ids(data["action_token_ids"], attention_mask)
+ 
+     routed_experts = data.get("routed_experts", None)
+     if routed_experts is not None and not routed_experts.is_nested:
+diff --git a/verl/workers/utils/categorical_actions.py b/verl/workers/utils/categorical_actions.py
+new file mode 100644
+index 00000000..e12512e5
+--- /dev/null
++++ b/verl/workers/utils/categorical_actions.py
+@@ -0,0 +1,76 @@
++"""Sparse legal-action probabilities for CToM's single-token controller.
++
++An action row contains [draft_id, ask_id, commit_id]; -1 masks an illegal
++choice, and [-1, -1, -1] identifies ordinary language tokens. Logits supplied
++here have already been divided by the policy sampling temperature.
++"""
++
++import torch
++
++
++def categorical_outputs(logits, labels, allowed_ids, language_log_probs):
++    positions = (allowed_ids >= 0).any(-1).nonzero(as_tuple=True)[0]
++    ids = allowed_ids[positions]
++    legal = ids >= 0
++    # Advanced indexing only materializes the two/three action logits, never
++    # a second full vocabulary tensor.
++    selected = logits[positions[:, None], ids.clamp_min(0)].float()
++    selected = selected.masked_fill(~legal, -torch.inf)
++    log_q = selected.log_softmax(-1)
++    q = log_q.exp()
++    matches = ids.eq(labels[positions, None]) & legal
++    if not matches.sum(-1).eq(1).all():
++        raise ValueError("Sampled action is not in its recorded legal action set")
++    action_log_probs = log_q.masked_fill(~matches, 0).sum(-1)
++    entropy = -(q * log_q.masked_fill(~legal, 0)).sum(-1)
++    # index_copy removes the full-vocabulary gradient at action positions.
++    log_probs = language_log_probs.index_copy(0, positions, action_log_probs)
++    zeros = torch.zeros_like(language_log_probs)
++    outputs = {
++        "action_entropy": zeros.index_copy(0, positions, entropy),
++        "action_p_ask": zeros.index_copy(0, positions, q[:, 1]),
++        "action_p_draft": zeros.index_copy(0, positions, q[:, 0]),
++        "action_p_commit": zeros.index_copy(0, positions, q[:, 2]),
++    }
++    return log_probs, outputs
++
++
++def shifted_action_ids(action_ids, attention_mask):
++    """Response-token metadata -> unpadded causal logit positions, row by row."""
++    prompt_width = attention_mask.shape[1] - action_ids.shape[1]
++    rows = []
++    for ids, mask in zip(action_ids, attention_mask, strict=True):
++        full = torch.cat((ids.new_full((prompt_width, 3), -1), ids))
++        full = full[mask.bool()]
++        rows.append(torch.cat((full[1:], full.new_full((1, 3), -1))))
++    return torch.nested.as_nested_tensor(rows, layout=torch.jagged)
++
++
++def episode_action_mean(values, mask, *, global_batch_size, dp_size):
++    """Mean decisions within episode, then mean over the global PPO batch.
++
++    Episodes without decisions contribute zero; controller/language length and
++    microbatch partitioning cannot change the regularizer's coefficient.
++    """
++    per_episode = (values * mask).sum(-1) / mask.sum(-1).clamp_min(1)
++    return per_episode.sum() * dp_size / global_batch_size
++
++
++def action_batch_from_records(records, response_ids, response_mask):
++    """Validate rollout offsets and materialize response-aligned action metadata."""
++    result = response_ids.new_full((*response_ids.shape, 3), -1)
++    for i, rounds in enumerate(records):
++        seen = set()
++        for record in rounds or []:
++            if record.get("action_protocol") != "categorical_v1":
++                raise ValueError("Mixed/missing action protocols in categorical rollout batch")
++            offset = record.get("action_offset")
++            ids = record.get("action_token_ids", [])
++            if (not isinstance(offset, int) or not 0 <= offset < response_ids.shape[1]
++                    or offset in seen or len(ids) != 3):
++                raise ValueError("Invalid/duplicate categorical action offset or alphabet")
++            if not response_mask[i, offset] or int(response_ids[i, offset]) not in ids:
++                raise ValueError("Action metadata does not match the sampled PPO token")
++            seen.add(offset)
++            result[i, offset] = result.new_tensor(ids)
++    return result

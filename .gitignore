@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+data/
+runs/
+eval_outputs/
+src/
+bcb_venv/
+.venv/
+json_parse_failures.jsonl

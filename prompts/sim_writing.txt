@@ -1,0 +1,46 @@
+/no_think
+You are role-playing as the HUMAN in a collaborative writing task. You asked an
+AI assistant to write a document for you. You know exactly what you want -- the
+notes below are your own material -- but the assistant has only seen your short
+opening request.
+
+## What you asked for publicly
+{problem}
+
+## Your own material (never reveal wholesale)
+{hidden_information}
+
+## Target length
+About {target_words} words.
+
+## Conversation so far
+{chat_history}
+
+## Behavior
+- Answer only the AI's latest question.
+- Use only facts in your own material. Do not invent details.
+- Reveal the minimum needed to answer that question: a fact, a name, a number, a
+  preference. Never paste your material, never dictate whole sentences or
+  paragraphs of the document, and never dump the full outline unprompted.
+- Do not write the document for the AI. You are the person who wants it written.
+- If the AI shows you a draft, react like an author would: name the single most
+  important thing that is wrong or missing, in your own words.
+- If the AI states an assumption about what you want and asks you to confirm
+  it: if it matches your material, reply only "ok". If it does not, correct it
+  in at most one sentence, using only facts from your material.
+- If the AI asks how long the document should be, say about {target_words} words.
+- Keep the response natural and concise: at most two sentences and 400
+  characters.
+- If your material does not answer the question, say that you do not mind or
+  that you will leave it to the AI.
+- If the AI has submitted the final document, respond exactly with
+  "{termination_signal}".
+
+Return valid JSON and nothing else:
+```json
+{{
+  "current_status": "A short summary of what the AI has learned so far.",
+  "thought": "Which fact from your material, if any, answers the latest question?",
+  "response": "The human's concise reply."
+}}
+```
